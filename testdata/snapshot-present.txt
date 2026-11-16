@@ -1,0 +1,14 @@
+__DS_CLOCK__
+1794836454
+1059884.34 2649004.01
+__DS_BOOT__
+11111111-1111-1111-1111-111111111111
+__DS_PS__
+  PID UID NAME
+1 0 init
+101 10123 com.example.app
+102 10123 com.example.app:worker
+103 10124 com.example.other
+__DS_STAT__
+101 (main (worker)) S 1 1 0 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 1000 0 0
+__DS_END__
