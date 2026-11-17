@@ -71,6 +71,9 @@ CREATE TABLE observations (sequence INTEGER PRIMARY KEY, payload TEXT NOT NULL);
 	if err != nil {
 		return nil, err
 	}
+	if len(body) > 64<<10 {
+		return nil, errors.New("metadata exceeds 64 KiB")
+	}
 	if _, err = db.ExecContext(ctx, "INSERT INTO metadata VALUES (1, ?)", string(body)); err != nil {
 		return nil, err
 	}
@@ -98,7 +101,7 @@ func validateRecord(record Record) error {
 	if record.Sequence <= 0 {
 		return errors.New("observation sequence must be positive")
 	}
-	if record.Kind != "snapshot" && record.Kind != "gap" && record.Kind != "evidence" {
+	if record.Kind != "snapshot" && record.Kind != "gap" && record.Kind != "evidence" && record.Kind != "source_status" {
 		return errors.New("unknown observation kind")
 	}
 	if (record.Kind == "snapshot") != (record.Snapshot != nil) {
@@ -115,6 +118,9 @@ func validateRecord(record Record) error {
 	}
 	if (record.Kind == "evidence") != (record.Evidence != nil) {
 		return errors.New("evidence payload does not match observation kind")
+	}
+	if (record.Kind == "source_status") != (record.SourceStatus != nil) || (record.SourceStatus != nil && (record.Source == "" || record.SourceStatus.SelectedObservations < 0 || record.SourceStatus.SelectedObservations > 512)) {
+		return errors.New("invalid source read status")
 	}
 	if record.Source != "" && (record.Snapshot != nil || len(record.Transitions) != 0) {
 		return errors.New("diagnostic source cannot change lifecycle")
@@ -183,12 +189,15 @@ func Replay(ctx context.Context, path string, header func(Metadata) error, visit
 	if version != 1 && version != SchemaVersion {
 		return fmt.Errorf("unsupported session schema %d", version)
 	}
-	var raw string
-	if err := db.QueryRowContext(ctx, "SELECT payload FROM metadata WHERE id=1").Scan(&raw); err != nil {
+	var raw sql.NullString
+	if err := db.QueryRowContext(ctx, "SELECT CASE WHEN length(CAST(payload AS BLOB)) <= 65536 THEN payload END FROM metadata WHERE id=1").Scan(&raw); err != nil {
 		return err
 	}
+	if !raw.Valid {
+		return errors.New("stored metadata exceeds 64 KiB")
+	}
 	var meta Metadata
-	if err := json.Unmarshal([]byte(raw), &meta); err != nil {
+	if err := json.Unmarshal([]byte(raw.String), &meta); err != nil {
 		return err
 	}
 	if meta.Schema != version {
@@ -225,7 +234,7 @@ FROM observations ORDER BY sequence`)
 		if record.Sequence != seq {
 			return fmt.Errorf("inconsistent observation sequence %d", seq)
 		}
-		if version == 1 && (record.Source != "" || record.Evidence != nil || record.Kind == "evidence") {
+		if version == 1 && (record.Source != "" || record.Evidence != nil || record.SourceStatus != nil || record.Kind == "evidence") {
 			return errors.New("schema 2 record in schema 1 recording")
 		}
 		if err := validateRecord(record); err != nil {

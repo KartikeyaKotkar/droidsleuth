@@ -2,6 +2,7 @@ package evidence
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -30,12 +31,12 @@ func TestLogcatScopeAndReuse(t *testing.T) {
 		{"ANR", logline("system", 900, "am_anr", "[0,42,com.example.app,0,Input dispatch timed out, detail]"), 1},
 		{"ANR other user", logline("system", 900, "am_anr", "[10,42,com.example.app,0,timeout]"), 0},
 		{"ANR untrusted emitter", logline("10123", 900, "am_anr", "[0,42,com.example.app,0,timeout]"), 0},
-		{"native", logline("root", 99, "DEBUG", "*** *** ***") + "\n" + logline("root", 99, "DEBUG", "pid: 42, tid: 42, name: app >>> com.example.app <<<") + "\n" + logline("root", 99, "DEBUG", "uid: 10123"), 1},
+		{"native", logline("root", 99, "DEBUG", "*** *** ***") + "\n" + logline("root", 99, "DEBUG", "pid: 42, ppid: 123, tid: 42, name: app >>> com.example.app <<<") + "\n" + logline("root", 99, "DEBUG", "uid: 10123") + "\n" + logline("root", 99, "DEBUG", "signal 11 (SIGSEGV), code -1 (SI_QUEUE), fault addr --------"), 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, bad := Logcat(tc.text, target, "boot")
-			if bad || len(got) != tc.want {
+			if bad != (tc.name == "PID alone") || len(got) != tc.want {
 				t.Fatalf("events=%d malformed=%t", len(got), bad)
 			}
 			for _, e := range got {
@@ -49,6 +50,13 @@ func TestLogcatScopeAndReuse(t *testing.T) {
 		})
 	}
 }
+func TestNonstandardCrashLayoutIsGap(t *testing.T) {
+	out, bad := Logcat(logline("system", 900, "am_crash", "[42,0,com.example.app,0,Native crash,Segmentation fault]"), target, "boot")
+	if !bad || len(out) != 0 {
+		t.Fatal("nonstandard event layout guessed as a process instance")
+	}
+}
+
 func TestMalformedAndOversizedLogcat(t *testing.T) {
 	_, bad := Logcat("logd: dropped records\n"+java("10123", 42, target.Package)+"\n"+logline("10123", 42, "AndroidRuntime", strings.Repeat("x", TextLimit)), target, "boot")
 	if !bad {
@@ -69,7 +77,7 @@ func TestExitHistoryTimeReasonsAndMissingSupport(t *testing.T) {
 			t.Fatalf("bad event %+v", e)
 		}
 	}
-	for _, text := range []string{"Permission Denial", "Unknown command", strings.ReplaceAll(history(4), "pid=42", "pid=no")} {
+	for _, text := range []string{"Permission Denial", "Unknown command", strings.ReplaceAll(history(4), "process=com.example.app", "unknownName=com.example.app"), strings.ReplaceAll(history(4), "pid=42", "pid=no")} {
 		if _, err := ExitHistory(text, target, "UTC"); err == nil {
 			t.Fatal("unsupported/malformed history became empty success")
 		}
@@ -84,5 +92,39 @@ func TestExitHistoryTimeReasonsAndMissingSupport(t *testing.T) {
 	out, err = ExitHistory(history(4), target, "missing/timezone")
 	if err != nil || out[0].Events[0].DeviceTimeNS != 0 {
 		t.Fatal("unknown timezone invented a timestamp")
+	}
+}
+
+func TestNativeMetadataWithoutSignalIsNotCrash(t *testing.T) {
+	raw := logline("root", 99, "DEBUG", "pid: 42, tid: 42, name: app >>> com.example.app <<<") + "\n" + logline("root", 99, "DEBUG", "uid: 10123")
+	out, bad := Logcat(raw, target, "boot")
+	if bad || len(out) != 0 {
+		t.Fatal("nonfatal process dump inferred as crash")
+	}
+}
+func TestAmbiguousExitHistoryWallTime(t *testing.T) {
+	raw := strings.Replace(history(4), "2023-11-14 22:13:20.123", "2023-11-05 01:30:00.123", 1)
+	out, err := ExitHistory(raw, target, "America/New_York")
+	if err != nil || len(out) != 1 || out[0].Events[0].DeviceTimeNS != 0 {
+		t.Fatal("ambiguous DST wall time became exact instant")
+	}
+}
+
+func TestContradictoryProcessBlockIsNotPersisted(t *testing.T) {
+	raw := java("10123", 42, target.Package) + "\n" + logline("10123", 42, "AndroidRuntime", "Process: com.private.other, PID: 42") + "\n" + logline("10123", 42, "AndroidRuntime", "Process: com.example.app, PID: 42")
+	out, bad := Logcat(raw, target, "boot")
+	if !bad || len(out) != 0 {
+		t.Fatal("contradictory block leaked unrelated process text")
+	}
+}
+
+func TestSanitizedPhysicalNativeFixture(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/logcat-device-native.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, bad := Logcat(string(raw), target, "boot")
+	if bad || len(out) != 1 || out[0].Events[0].Kind != "native_crash" {
+		t.Fatal("physical native-crash shape not recognized")
 	}
 }

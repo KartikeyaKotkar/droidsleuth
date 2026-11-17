@@ -32,17 +32,18 @@ type Transition struct {
 
 // Record times describe host observation bounds, never an exact process death time.
 type Record struct {
-	Source         string       `json:"source,omitempty"`
-	Evidence       *Evidence    `json:"evidence,omitempty"`
-	Sequence       int64        `json:"sequence"`
-	Kind           string       `json:"kind"`
-	StartedUTC     time.Time    `json:"started_utc"`
-	EndedUTC       time.Time    `json:"ended_utc"`
-	StartElapsedNS int64        `json:"start_elapsed_ns"`
-	EndElapsedNS   int64        `json:"end_elapsed_ns"`
-	Snapshot       *Snapshot    `json:"snapshot,omitempty"`
-	Transitions    []Transition `json:"transitions,omitempty"`
-	Error          string       `json:"error,omitempty"`
+	SourceStatus   *SourceStatus `json:"source_status,omitempty"`
+	Source         string        `json:"source,omitempty"`
+	Evidence       *Evidence     `json:"evidence,omitempty"`
+	Sequence       int64         `json:"sequence"`
+	Kind           string        `json:"kind"`
+	StartedUTC     time.Time     `json:"started_utc"`
+	EndedUTC       time.Time     `json:"ended_utc"`
+	StartElapsedNS int64         `json:"start_elapsed_ns"`
+	EndElapsedNS   int64         `json:"end_elapsed_ns"`
+	Snapshot       *Snapshot     `json:"snapshot,omitempty"`
+	Transitions    []Transition  `json:"transitions,omitempty"`
+	Error          string        `json:"error,omitempty"`
 }
 
 type Metadata struct {
@@ -81,4 +82,11 @@ type Event struct {
 	// Lines are one-based references within this observation's source text.
 	FirstLine int `json:"first_line"`
 	LastLine  int `json:"last_line"`
+}
+
+// SourceStatus records successful bounded reads even when no selected evidence
+// was found. Success does not establish completeness of Android's retained ring.
+type SourceStatus struct {
+	ReadSucceeded        bool `json:"read_succeeded"`
+	SelectedObservations int  `json:"selected_observations"`
 }

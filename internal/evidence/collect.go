@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -59,7 +60,14 @@ func Start(ctx context.Context, s shell, meta session.Metadata) (<-chan session.
 					if err != nil {
 						issue = "logcat boot identity unavailable"
 					} else {
-						raw, err := s.Shell(ctx, LogcatCommand)
+						command := LogcatCommand
+						if previous != "" {
+							if last, ok := decode(previous); ok && last.ns > 1000 {
+								cursor := last.ns - 1000
+								command = strings.Replace(LogcatCommand, "-t 512", fmt.Sprintf("-T '%d.%06d'", cursor/1e9, (cursor%1e9)/1000), 1)
+							}
+						}
+						raw, err := s.Shell(ctx, command)
 						if err != nil {
 							issue = "logcat read failed or disconnected"
 							previous = ""
@@ -68,11 +76,19 @@ func Start(ctx context.Context, s shell, meta session.Metadata) (<-chan session.
 							if previous != "" && !strings.Contains(raw, previous) {
 								issue = "logcat tail overlap lost: rollover, truncation or source reset"
 							}
-							if len(lines) >= 512 {
+							if command == LogcatCommand && len(lines) >= 512 {
 								issue = "logcat bounded tail saturated; records may be lost"
 							}
 							var bad bool
-							observations, bad = Logcat(raw, meta, strings.TrimSpace(boot))
+							endBoot, bootErr := s.Shell(ctx, "cat /proc/sys/kernel/random/boot_id")
+							if bootErr != nil || strings.TrimSpace(endBoot) != strings.TrimSpace(boot) {
+								issue = "boot changed or became unavailable during logcat read"
+								raw = ""
+								lines = nil
+								previous = ""
+							} else {
+								observations, bad = Logcat(raw, meta, strings.TrimSpace(boot))
+							}
 							if bad {
 								issue = "logcat malformed or oversized records; diagnostic coverage incomplete"
 							}
@@ -99,6 +115,13 @@ func Start(ctx context.Context, s shell, meta session.Metadata) (<-chan session.
 							issue = err.Error()
 						}
 					}
+				}
+				if len(observations) > 64 {
+					observations = observations[:64]
+					issue = "selected diagnostic observation limit exceeded; coverage incomplete"
+				}
+				if !emit(session.Record{Kind: "source_status", SourceStatus: &session.SourceStatus{ReadSucceeded: issue == "", SelectedObservations: len(observations)}, StartedUTC: begin.UTC(), EndedUTC: time.Now().UTC()}) {
+					return
 				}
 				if issue != "" && !gap(issue, begin) {
 					return

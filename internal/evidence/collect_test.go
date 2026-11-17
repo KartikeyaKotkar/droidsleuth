@@ -111,3 +111,44 @@ esac
 		}
 	}
 }
+
+func TestFakeADBDisconnectAndRecovery(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "adb")
+	script := `#!/bin/sh
+case "$*" in
+ *random/boot_id*) printf 'boot\n';;
+ *persist.sys.timezone*) printf 'UTC\n';;
+ *exit-info*) printf 'ACTIVITY MANAGER PROCESS EXIT INFO\n';;
+ *logcat*)
+  if [ ! -f "$FIXTURE_READY" ]; then touch "$FIXTURE_READY"; exit 1; fi
+  printf '1700000000.123456 1000 900 900 I am_anr: [0,42,com.example.app,0,fixture timeout]\n';;
+ *) exit 1;;
+esac
+`
+	if err := os.WriteFile(path, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FIXTURE_READY", filepath.Join(dir, "ready"))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ch, stop := Start(ctx, adb.Client{Path: path}, target)
+	defer stop()
+	gap := false
+	for {
+		select {
+		case r := <-ch:
+			if strings.Contains(r.Error, "disconnected") {
+				gap = true
+			}
+			if r.Evidence != nil {
+				if !gap || r.Evidence.Events[0].Kind != "anr_report" {
+					t.Fatal("recovery lost source gap or report")
+				}
+				return
+			}
+		case <-ctx.Done():
+			t.Fatal("source failed to recover")
+		}
+	}
+}

@@ -18,12 +18,14 @@ type Reference struct {
 	LastLine  int   `json:"last_line"`
 }
 type Finding struct {
-	Event       session.Event      `json:"reported_event"`
-	Source      string             `json:"source"`
-	Evidence    []Reference        `json:"evidence"`
-	Candidates  []session.Identity `json:"candidate_instances,omitempty"`
-	Uncertainty []string           `json:"uncertainty"`
-	Conflict    bool               `json:"conflicting_exit_reasons,omitempty"`
+	Excerpt          string             `json:"source_excerpt"`
+	ExcerptTruncated bool               `json:"excerpt_truncated,omitempty"`
+	Event            session.Event      `json:"reported_event"`
+	Source           string             `json:"source"`
+	Evidence         []Reference        `json:"evidence"`
+	Candidates       []session.Identity `json:"candidate_instances,omitempty"`
+	Uncertainty      []string           `json:"uncertainty"`
+	Conflict         bool               `json:"conflicting_exit_reasons,omitempty"`
 }
 type Report struct {
 	Version        int              `json:"version"`
@@ -111,10 +113,13 @@ func Analyze(ctx context.Context, path string) (Report, error) {
 			return nil
 		}
 		for _, event := range record.Evidence.Events {
+			keyEvent := event
+			keyEvent.FirstLine = 0
+			keyEvent.LastLine = 0
 			keyBody, _ := json.Marshal(struct {
 				Source string
 				Event  session.Event
-			}{record.Source, event})
+			}{record.Source, keyEvent})
 			key := string(keyBody)
 			ref := Reference{record.Sequence, event.FirstLine, event.LastLine}
 			if index, ok := keys[key]; ok {
@@ -129,10 +134,15 @@ func Analyze(ctx context.Context, path string) (Report, error) {
 				capped = true
 				continue
 			}
-			f := Finding{Event: event, Source: record.Source, Evidence: []Reference{ref}, Uncertainty: []string{"Source does not provide kernel start ticks; exact process instance is unproven."}}
+			excerpt := record.Evidence.Text
+			short := len(excerpt) > 2048
+			if short {
+				excerpt = excerpt[:2048]
+			}
+			f := Finding{Excerpt: excerpt, ExcerptTruncated: short || record.Evidence.Truncated, Event: event, Source: record.Source, Evidence: []Reference{ref}, Uncertainty: []string{"Source does not provide kernel start ticks; exact process instance is unproven."}}
 			for _, id := range identities {
 				v := instances[id]
-				if event.PID != id.PID || event.Process != v.p.Name || (event.UID != nil && *event.UID != id.UID) || (event.BootID != "" && event.BootID != id.BootID) {
+				if event.PID != id.PID || event.Process != v.p.Name || (event.UID != nil && *event.UID != id.UID) || (event.User != nil && *event.User != id.UID/100000) || (event.BootID != "" && event.BootID != id.BootID) {
 					continue
 				}
 				// Only suggest instances actually observed at the source timestamp, with

@@ -37,6 +37,13 @@ func TestReplayHasNoADBDependency(t *testing.T) {
 		t.Fatalf("unsafe or missing gap output: %q", out.String())
 	}
 	out.Reset()
+	if err := run(ctx, []string{"investigate", "--json", path}, &out, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"findings":[]`) {
+		t.Fatalf("disappearance/gap invented incident: %s", out.String())
+	}
+	out.Reset()
 	if err := run(ctx, []string{"replay", "--json", path}, &out, &stderr); err != nil {
 		t.Fatal(err)
 	}

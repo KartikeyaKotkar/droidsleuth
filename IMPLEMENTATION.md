@@ -1,4 +1,14 @@
-# Implemented milestone: main-process capture and offline replay
+# DroidSleuth implementation record
+
+## Current scope
+
+Milestone 1 correctness and performance gates are accepted. Milestone 2 adds
+bounded diagnostic evidence and offline investigation; its implementation,
+validation and limitations are recorded in the final sections below. Earlier
+Milestone 1 sections retain their historical scope and measurements. PLAN.md
+remains the research and roadmap document.
+
+## Milestone 1: main-process capture and offline replay
 
 ## Scope and ownership
 
@@ -464,3 +474,146 @@ Implementation sequence:
 
 Current work is in progress; this checkpoint does not declare Milestone 2
 complete. No real-device application mutation has occurred for this milestone.
+
+## Milestone 2: bounded incident evidence and offline investigation
+
+### Implemented behavior
+
+New `watch` recordings enable diagnostic collection by default. The original
+optimized `SnapshotCommand`, strict snapshot decoder and identity tracker are
+unchanged. One snapshot loop and two independent diagnostic workers feed one
+SQLite writer. Only snapshot failures affect lifecycle `after_gap` state;
+logcat/exit-history gaps cannot fabricate disappearance or restart.
+
+Logcat uses the main, crash, system and events buffers with native tag filters
+for `AndroidRuntime`, `DEBUG`, `am_crash` and `am_anr`. Initial access is a
+512-record tail; subsequent reads overlap the last decoded realtime timestamp
+by one microsecond. Reads occur three seconds after the preceding work ends.
+This intentionally uses bounded cancellable dump polls rather than a persistent
+stream. Missing overlap, initial-tail saturation, command/output-limit failure,
+malformed records, block overflow and source resets produce diagnostic gaps.
+Boot ID is checked before and after log reads. No buffers are cleared, Android
+settings changed or privileged trace files read. An empty log read never proves
+that a crash or ANR did not occur.
+
+Exit history is polled through package-scoped `dumpsys activity exit-info` at
+startup and every fifteen seconds after work. Supported empty history is
+separate from permission denial, unsupported output and malformed selected
+entries. Android's reported reason number and label are retained, including
+unknown/signaled/user-requested reasons; SIGKILL is not reclassified as LMK.
+Exit-history occurrence boot ID is deliberately unknown because history may
+survive reboot. Device-local timestamps are converted using the reported IANA
+timezone; unknown zones, invalid timestamps and ambiguous DST folds retain raw
+wall time with unknown occurrence time. The device timezone is assumed stable
+within a poll; cross-clock calibration and detecting a timezone change during
+the read remain limitations.
+
+Java/Kotlin fatal reports require `FATAL EXCEPTION`, an explicit selected process
+name, an agreeing affected/header PID and the selected UID. Native reports
+require an explicit selected process name, affected UID/PID and a signal marker;
+process metadata or a nonfatal debugger dump alone is insufficient. Structured
+ANR/crash events require root/system emitter identity, selected Android user and
+explicit process name. Exact package names and conventional `package:process`
+names are supported; arbitrary custom names, isolated UIDs and shared-UID
+ownership beyond those explicit names remain unsupported. Diagnostic secondary
+process reports can be retained, but only the main process receives kernel
+identity snapshots in this milestone.
+
+### Persistence, limits and replay
+
+New recordings use schema 2 (`PRAGMA user_version=2` and matching metadata).
+Schema 1 remains readable offline without migration; newer/unknown schemas are
+rejected. Evidence rows atomically contain selected source excerpts, normalized
+reported events and one-based line references. Global observation sequence plus
+line range identifies evidence; host collection bounds and source occurrence
+time/precision are separate. Successful bounded source reads, including reads
+with zero selected evidence, are persisted as source-status observations.
+Start/end coverage limits and interrupted/delayed final reads are explicit gaps.
+
+Existing 4 MiB ADB stdout, 8 KiB stderr, three-second per-command deadline,
+64 KiB observation, 240 MiB stop threshold and 256 MiB database limit remain.
+Each excerpt is limited to 8 KiB, Java/native blocks to 128 lines, active block
+groups to 16, source observations to 64 per poll and the writer queue to 16.
+Overflow produces a gap instead of silently promising completeness. The two
+workers use backpressure and cancellation; there are no unbounded goroutine or
+message queues. Source deduplication retains 512 fingerprints per worker;
+exit-history slot numbers do not define identity. Changed source text or reasons
+remain observations, and bounded deduplication can retain old retransmissions
+after cache eviction. Offline analysis deduplicates normalized reports while
+preserving up to sixteen evidence references per finding.
+
+Unrelated logcat text is only transient in the bounded ADB response. It is never
+persisted as raw source text or error diagnostics. Source text is retained only
+after explicit scope checks; malformed contradictory process headers are dropped.
+Device strings and excerpts are quoted in text output.
+
+`replay` includes all schema-2 observations and still requires no ADB executable
+or connected device. `investigate [--json] FILE` makes two bounded read-only
+passes and reports source claims, bounded source excerpts, evidence references,
+candidate identities, collection gaps and uncertainty. Its JSON report has
+independent format version 1. Finding order follows committed observation order;
+identity candidates are sorted deterministically. Limits are 4096 observed
+instances/findings, sixteen candidates/references per finding and 256 displayed
+gaps, with an explicit incompleteness limitation when reached.
+
+PID, name, UID/user, source boot ID when available and source timestamp can
+suggest an observed full identity. Even one candidate remains **unproven**:
+these diagnostic sources do not supply kernel start ticks. Association only
+suggests instances observed within the reported second-resolution time span;
+reports outside that span remain unbound rather than matched to the nearest
+PID. Missing snapshots, PID reuse, delayed records and clock discontinuities
+remain explicit uncertainty. Exit reports before recording may be historical.
+Different reported exit reasons for the same UID/PID/name/occurrence timestamp
+are retained as conflicting observations; no cause wins by source priority.
+ANR followed by crash is not automatically a contradiction. Disappearance alone
+is always unexplained, regardless of nearby reports.
+
+### Validation and hardware compatibility
+
+The existing real unrooted Android 17/API 37 phone, user 0, eight CPUs and
+`CLK_TCK=100` was used. Host: Linux x86-64, Go 1.27.3, ADB 37.0.1; fixture built
+with JDK 21, SDK 36 and build-tools 36.0.0. No emulator measurements are included.
+The user approved the exact disposable-app installation, idle/Java/native
+launches, foreground ANR broadcast, force-stop and uninstall commands before
+any mutation. Installation used no replacement flag and the package was absent.
+The fixture requests no permissions and stores no user data. A three-second
+delayed Java exception and SIGSEGV action, plus a 120-second blocking test-only
+receiver, affect only this disposable package.
+
+Independent scoped ADB logcat and exit-history commands confirmed Java exception
+reason 4, native crash reason 5/status 11 and broadcast ANR reason 6. Captures
+retained a scoped Java fatal event, native crash indicators and an explicit
+`am_anr`, with matching affected PIDs/UIDs/timestamps in the independent source
+observations. The corrected 110-second recording contains both native and ANR
+log events plus exit-history reports. Controlled force-stops remained reported
+reason 10, and process disappearance alone retained unknown cause.
+
+Hardware revealed an optional `ppid` field in the native process header; parsing
+was corrected and a sanitized four-line physical-output fixture now tests that
+shape, including the explicit signal requirement. This phone's `am_crash`
+record layout disagrees with its advertised event-tag order (including a native
+record carrying the system emitter PID). It is rejected with a gap rather than
+heuristically reordered or trusted for process identity. Java/native diagnostic
+blocks and independent exit history supply the usable reports. ANR event order
+was supported. Native/Java mode launches that only delivered an Intent to an
+existing Activity were not counted as crashes; tests used a fresh fixture launch.
+
+An early bounded-tail-only implementation lost overlap in busy buffers. It was
+replaced with the overlapping timestamp cursor. Cross-buffer silent loss can
+still occur despite one surviving overlap marker; overlap is a continuity check,
+not proof that every buffer retained every record. A malformed retained record
+may produce repeated source gaps while it remains in the overlap. Finite Android
+rings, missing permissions, OEM formats and polling delays mean some incidents
+will be absent or only partially supported. The investigator exposes this and
+never treats missing evidence as a negative diagnosis.
+
+Automated validation covers Java and native reports, nonfatal native dumps,
+ANRs, unrelated processes/users, PID reuse, missing/unsupported exit history,
+malformed/oversized/truncated output, conflicting process blocks, DST ambiguity,
+contradictory exit reasons, deduplication, tail rollover, ADB failure/recovery,
+subprocess cancellation, schema-1 compatibility, evidence-reference validation,
+lifecycle isolation and exact schema-2 offline replay. Offline investigation is
+repeated to check determinism and leaves source database bytes unchanged.
+
+No logcat-to-death cause inference, TUI, dashboard, network monitor, Perfetto,
+companion service, privileged tombstone retrieval or AI diagnosis was added.

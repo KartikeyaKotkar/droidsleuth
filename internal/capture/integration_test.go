@@ -165,3 +165,75 @@ func TestCancellationDuringFakeADBRead(t *testing.T) {
 		t.Fatalf("lost interrupted attempt: %+v", records)
 	}
 }
+
+func TestEvidenceFakeADBPipelineKeepsLifecycleIndependent(t *testing.T) {
+	present := fixture(t, "snapshot-present.txt")
+	client := fakeClient(t, map[string]string{"1.stdout": present, "2.stdout": strings.ReplaceAll(present, "1000 0 0", "2000 0 0")})
+	original := client.Path + "-snapshots"
+	if err := os.Rename(client.Path, original); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(client.Path)
+	raw := "1700000000.123456 10123 101 101 E AndroidRuntime: FATAL EXCEPTION: main\n1700000000.123456 10123 101 101 E AndroidRuntime: Process: com.example.app, PID: 101\n1700000000.123457 1000 900 900 I am_anr: [0,101,com.example.app,0,fixture timeout]\n1700000000.123458 10124 102 102 E AndroidRuntime: Process: com.private.other, PID: 102\n"
+	if err := os.WriteFile(filepath.Join(dir, "logcat"), []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := `#!/bin/sh
+case "$*" in
+ *__DS_CLOCK__*) exec "$DROIDSLEUTH_FIXTURES/adb-snapshots" "$@";;
+ *random/boot_id*) printf 'fixture-boot\n';;
+ *persist.sys.timezone*) printf 'UTC\n';;
+ *exit-info*) printf 'Unknown command\n';;
+ *logcat*) cat "$DROIDSLEUTH_FIXTURES/logcat";;
+ *) exec "$DROIDSLEUTH_FIXTURES/adb-snapshots" "$@";;
+esac
+`
+	if err := os.WriteFile(client.Path, []byte(wrapper), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	path := filepath.Join(t.TempDir(), "evidence.db")
+	var committed []session.Record
+	events, snapshots := 0, 0
+	err := Run(ctx, client, session.Metadata{Package: "com.example.app", UID: 10123}, Options{Path: path, Evidence: true, Interval: time.Millisecond, Visit: func(r session.Record) error {
+		committed = append(committed, r)
+		if r.Evidence != nil {
+			events += len(r.Evidence.Events)
+		}
+		if r.Snapshot != nil {
+			snapshots++
+			for _, tr := range r.Transitions {
+				if tr.AfterGap {
+					t.Fatal("diagnostic gap contaminated process tracker")
+				}
+			}
+		}
+		if events >= 2 && snapshots >= 2 {
+			cancel()
+		}
+		return nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events != 2 || snapshots < 2 {
+		t.Fatalf("events=%d snapshots=%d", events, snapshots)
+	}
+	if err = os.Remove(client.Path); err != nil {
+		t.Fatal(err)
+	}
+	var replayed []session.Record
+	err = session.Replay(context.Background(), path, func(session.Metadata) error { return nil }, func(r session.Record) error { replayed = append(replayed, r); return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := json.Marshal(committed)
+	after, _ := json.Marshal(replayed)
+	if string(before) != string(after) {
+		t.Fatal("offline evidence replay differs")
+	}
+	if strings.Contains(string(after), "com.private.other") {
+		t.Fatal("unrelated log persisted")
+	}
+}

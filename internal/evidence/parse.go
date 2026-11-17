@@ -17,7 +17,8 @@ const TextLimit = 8192
 var header = regexp.MustCompile(`^\s*([0-9]+\.[0-9]+)\s+(\S+)\s+([0-9]+)\s+([0-9]+)\s+([VDIWEFAS])\s+([^:]+):\s?(.*)$`)
 var androidUID = regexp.MustCompile(`^u([0-9]+)_([ai])([0-9]+)$`)
 var processLine = regexp.MustCompile(`^Process: ([^,]+), PID: ([0-9]+)$`)
-var nativeProcess = regexp.MustCompile(`pid: ([0-9]+), tid: [0-9]+, name: .* >>> ([^ ]+) <<<'?`)
+var nativeProcess = regexp.MustCompile(`pid: ([0-9]+), (?:ppid: [0-9]+, )?tid: [0-9]+, name: .* >>> ([^ ]+) <<<'?`)
+var nativeSignal = regexp.MustCompile(`\bsignal [1-9][0-9]* \(SIG[A-Z0-9]+\)`)
 var nativeUID = regexp.MustCompile(`\buid: ([0-9]+)`)
 
 func UID(s string) (int, bool) {
@@ -175,6 +176,8 @@ func Logcat(text string, meta session.Metadata, boot string) ([]session.Evidence
 		uid := 0
 		known := false
 		fatal := false
+		signal := false
+		conflicting := false
 		kind := "java_fatal"
 		var raws []string
 		for _, l := range group {
@@ -184,15 +187,26 @@ func Logcat(text string, meta session.Metadata, boot string) ([]session.Evidence
 					fatal = true
 				}
 				if m := processLine.FindStringSubmatch(l.body); m != nil {
+					nextPID, _ := strconv.Atoi(m[2])
+					if name != "" && (name != m[1] || pid != nextPID) {
+						conflicting = true
+					}
 					name = m[1]
-					pid, _ = strconv.Atoi(m[2])
+					pid = nextPID
 					uid = l.uid
 					known = l.known && pid == l.pid
 				}
 			} else {
 				kind = "native_crash"
+				if nativeSignal.MatchString(l.body) {
+					signal = true
+				}
 				if m := nativeProcess.FindStringSubmatch(l.body); m != nil {
-					pid, _ = strconv.Atoi(m[1])
+					nextPID, _ := strconv.Atoi(m[1])
+					if name != "" && (name != m[2] || pid != nextPID) {
+						conflicting = true
+					}
+					pid = nextPID
 					name = m[2]
 					fatal = true
 				}
@@ -202,7 +216,17 @@ func Logcat(text string, meta session.Metadata, boot string) ([]session.Evidence
 				}
 			}
 		}
-		if fatal && known && uid == meta.UID && selected(name, meta.Package) && pid > 0 {
+		if first.tag == "AndroidRuntime" && fatal && (name == "" || !known) {
+			malformed = true
+		}
+		if kind == "native_crash" && signal && selected(name, meta.Package) && !known {
+			malformed = true
+		}
+		if conflicting {
+			malformed = true
+			continue
+		}
+		if fatal && (kind != "native_crash" || (signal && first.known && (first.uid == meta.UID || first.uid == 0 || first.uid == 1000))) && known && uid == meta.UID && selected(name, meta.Package) && pid > 0 {
 			result = append(result, observation("logcat-epoch-uid", strings.Join(raws, "\n"), session.Event{Kind: kind, Process: name, PID: pid, UID: &uid, DeviceTimeNS: first.ns, TimeUncertaintyNS: 1000, BootID: boot, Detail: "Explicit diagnostic report; instance identity not supplied by logcat"}))
 		}
 	}
@@ -255,6 +279,9 @@ func ExitHistory(text string, meta session.Metadata, zone string) ([]session.Evi
 		if name == "" {
 			name = field(block, "processName")
 		}
+		if name == "" {
+			return nil, fmt.Errorf("unrecognized exit-history process field")
+		}
 		if !selected(name, meta.Package) {
 			continue
 		}
@@ -274,7 +301,7 @@ func ExitHistory(text string, meta session.Metadata, zone string) ([]session.Evi
 		var ns int64
 		if loc, err := time.LoadLocation(zone); err == nil {
 			if t, e := time.ParseInLocation("2006-01-02 15:04:05.000", rawTime, loc); e == nil {
-				ns = t.UnixNano()
+				ns = unambiguousLocalTime(t, rawTime, loc)
 			}
 		}
 		// Retrieval boot is deliberately absent: exit history can survive a reboot.
@@ -285,4 +312,32 @@ func ExitHistory(text string, meta session.Metadata, zone string) ([]session.Evi
 		return nil, fmt.Errorf("unrecognized exit-history layout")
 	}
 	return out, nil
+}
+
+// Dumpsys renders local wall time without an offset. During a DST fold it can
+// name two instants; retain raw text and leave occurrence time unknown then.
+func unambiguousLocalTime(t time.Time, raw string, loc *time.Location) int64 {
+	const layout = "2006-01-02 15:04:05.000"
+	wall, err := time.Parse(layout, raw)
+	if err != nil {
+		return 0
+	}
+	offsets := map[int]bool{}
+	for h := -36; h <= 36; h++ {
+		_, offset := t.Add(time.Duration(h) * time.Hour).Zone()
+		offsets[offset] = true
+	}
+	var result int64
+	matches := 0
+	for offset := range offsets {
+		candidate := wall.Add(-time.Duration(offset) * time.Second)
+		if candidate.In(loc).Format(layout) == raw {
+			result = candidate.UnixNano()
+			matches++
+		}
+	}
+	if matches != 1 {
+		return 0
+	}
+	return result
 }

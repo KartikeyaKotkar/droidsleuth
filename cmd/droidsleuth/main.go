@@ -30,7 +30,7 @@ func main() {
 
 func run(ctx context.Context, args []string, out, diagnostic io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: droidsleuth devices | watch [flags] PACKAGE | replay [--json] FILE")
+		return errors.New("usage: droidsleuth devices | watch [flags] PACKAGE | replay [--json] FILE | investigate [--json] FILE")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(diagnostic)
@@ -118,6 +118,14 @@ func run(ctx context.Context, args []string, out, diagnostic io.Writer) error {
 			if _, err = fmt.Fprintf(out, "%s reported by %s: process=%q pid=%d device_time_ns=%d detail=%q reason=%v conflict=%t\n", f.Event.Kind, f.Source, f.Event.Process, f.Event.PID, f.Event.DeviceTimeNS, f.Event.Detail, reasonText(f.Event.Reason), f.Conflict); err != nil {
 				return err
 			}
+			if _, err = fmt.Fprintf(out, "  source excerpt (truncated=%t): %q\n", f.ExcerptTruncated, f.Excerpt); err != nil {
+				return err
+			}
+			for _, id := range f.Candidates {
+				if _, err = fmt.Fprintf(out, "  candidate instance: boot=%q uid=%d pid=%d start_ticks=%d (unproven)\n", id.BootID, id.UID, id.PID, id.StartTicks); err != nil {
+					return err
+				}
+			}
 			for _, ref := range f.Evidence {
 				if _, err = fmt.Fprintf(out, "  evidence: observation #%d lines %d..%d (available through replay --json)\n", ref.Sequence, ref.FirstLine, ref.LastLine); err != nil {
 					return err
@@ -188,6 +196,10 @@ func defaultPath() (string, error) {
 }
 
 func printRecord(out io.Writer, r session.Record) error {
+	if r.SourceStatus != nil {
+		_, err := fmt.Fprintf(out, "#%d %s bounded read: succeeded=%t selected_observations=%d\n", r.Sequence, r.Source, r.SourceStatus.ReadSucceeded, r.SourceStatus.SelectedObservations)
+		return err
+	}
 	if r.Evidence != nil {
 		_, err := fmt.Fprintf(out, "#%d %s evidence: %d reported event(s), truncated=%t\n", r.Sequence, r.Source, len(r.Evidence.Events), r.Evidence.Truncated)
 		return err
