@@ -243,10 +243,9 @@ process-list content and retained only byte counts and timings.
 
 No product correctness bug was found and no production Go code was changed.
 Changes are the disposable APK fixture/build script, a targeted post-gap
-replacement unit test, this report and its
-[machine-readable summary](docs/validation/2026-11-16.json). Raw device/session
-artifacts remain private under `/tmp/droidsleuth-validation-gate`; the committed
-summary omits the ADB serial. The research plan is unchanged.
+replacement unit test, and this report. Raw device/session artifacts remain
+private under `/tmp/droidsleuth-validation-gate`; the committed report omits the
+ADB serial. The research plan is unchanged.
 
 **Correctness passes on this device; the performance gate remains open. Do not
 expand into Milestone 2 collectors yet.** The measured device command cost is
