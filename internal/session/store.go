@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -59,7 +60,7 @@ PRAGMA journal_mode=DELETE;
 PRAGMA synchronous=FULL;
 PRAGMA max_page_count=65536;
 PRAGMA cache_size=-4096;
-PRAGMA user_version=1;
+PRAGMA user_version=2;
 CREATE TABLE metadata (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL);
 CREATE TABLE observations (sequence INTEGER PRIMARY KEY, payload TEXT NOT NULL);`)
 	if err != nil {
@@ -97,7 +98,7 @@ func validateRecord(record Record) error {
 	if record.Sequence <= 0 {
 		return errors.New("observation sequence must be positive")
 	}
-	if record.Kind != "snapshot" && record.Kind != "gap" {
+	if record.Kind != "snapshot" && record.Kind != "gap" && record.Kind != "evidence" {
 		return errors.New("unknown observation kind")
 	}
 	if (record.Kind == "snapshot") != (record.Snapshot != nil) {
@@ -108,6 +109,31 @@ func validateRecord(record Record) error {
 	}
 	if record.Kind == "gap" && (record.Error == "" || len(record.Transitions) != 0) {
 		return errors.New("gap must contain an error and no lifecycle transitions")
+	}
+	if record.Source != "" && record.Source != "logcat" && record.Source != "exit_history" {
+		return errors.New("unknown observation source")
+	}
+	if (record.Kind == "evidence") != (record.Evidence != nil) {
+		return errors.New("evidence payload does not match observation kind")
+	}
+	if record.Source != "" && (record.Snapshot != nil || len(record.Transitions) != 0) {
+		return errors.New("diagnostic source cannot change lifecycle")
+	}
+	if e := record.Evidence; e != nil {
+		if record.Source == "" || len(e.Text) > 8192 || len(e.Events) == 0 || len(e.Events) > 16 {
+			return errors.New("invalid or excessive evidence")
+		}
+		lines := strings.Count(e.Text, "\n") + 1
+		for _, event := range e.Events {
+			switch event.Kind {
+			case "java_fatal", "native_crash", "crash_report", "anr_report", "exit_report":
+			default:
+				return errors.New("unknown diagnostic event")
+			}
+			if event.PID <= 0 || event.Process == "" || event.FirstLine < 1 || event.LastLine < event.FirstLine || event.LastLine > lines {
+				return errors.New("invalid evidence reference")
+			}
+		}
 	}
 	for _, event := range record.Transitions {
 		if event.Kind != "appeared" && event.Kind != "no_longer_observed" {
@@ -154,7 +180,7 @@ func Replay(ctx context.Context, path string, header func(Metadata) error, visit
 	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version != SchemaVersion {
+	if version != 1 && version != SchemaVersion {
 		return fmt.Errorf("unsupported session schema %d", version)
 	}
 	var raw string
@@ -165,7 +191,7 @@ func Replay(ctx context.Context, path string, header func(Metadata) error, visit
 	if err := json.Unmarshal([]byte(raw), &meta); err != nil {
 		return err
 	}
-	if meta.Schema != SchemaVersion {
+	if meta.Schema != version {
 		return errors.New("inconsistent metadata schema")
 	}
 	switch meta.Status {
@@ -198,6 +224,9 @@ FROM observations ORDER BY sequence`)
 		}
 		if record.Sequence != seq {
 			return fmt.Errorf("inconsistent observation sequence %d", seq)
+		}
+		if version == 1 && (record.Source != "" || record.Evidence != nil || record.Kind == "evidence") {
+			return errors.New("schema 2 record in schema 1 recording")
 		}
 		if err := validateRecord(record); err != nil {
 			return fmt.Errorf("observation %d: %w", seq, err)

@@ -86,3 +86,44 @@ func TestSchemaAndStorageBounds(t *testing.T) {
 		t.Fatal("future schema accepted")
 	}
 }
+
+func TestSchemaOneCompatibilityAndEvidenceReferences(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "old.db")
+	s, err := Create(ctx, path, Metadata{Package: "com.example.app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Append(ctx, Record{Sequence: 1, Kind: "gap", Error: "offline"}); err != nil {
+		t.Fatal(err)
+	}
+	// Recreate the exact old metadata/user_version contract without migrating it.
+	if _, err = s.db.ExecContext(ctx, `PRAGMA user_version=1; UPDATE metadata SET payload=replace(payload,'"schema":2','"schema":1')`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if err = Replay(ctx, path, func(m Metadata) error {
+		if m.Schema != 1 {
+			t.Fatal("old schema changed")
+		}
+		return nil
+	}, func(Record) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Create(ctx, filepath.Join(t.TempDir(), "new.db"), Metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	e := &Evidence{Text: "report", Format: "fixture", Events: []Event{{Kind: "anr_report", Process: "com.example.app", PID: 42, FirstLine: 1, LastLine: 2}}}
+	if err = s.Append(ctx, Record{Sequence: 1, Kind: "evidence", Source: "logcat", Evidence: e}); err == nil {
+		t.Fatal("invalid source reference accepted")
+	}
+	e.Events[0].LastLine = 1
+	if err = s.Append(ctx, Record{Sequence: 1, Kind: "evidence", Source: "logcat", Evidence: e}); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Append(ctx, Record{Sequence: 2, Kind: "gap", Source: "logcat", Error: "loss", Transitions: []Transition{{Kind: "no_longer_observed"}}}); err == nil {
+		t.Fatal("source gap changed lifecycle")
+	}
+}

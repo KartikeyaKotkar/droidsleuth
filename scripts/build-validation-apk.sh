@@ -9,9 +9,9 @@ output=${1:?usage: sh scripts/build-validation-apk.sh NEW_OUTPUT_DIRECTORY}
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 mkdir "$output"
 mkdir "$output/classes" "$output/dex"
-javac --release 8 -classpath "$android" -d "$output/classes" "$root/testdata/android/MainActivity.java"
+javac --release 8 -classpath "$android" -d "$output/classes" "$root"/testdata/android/*.java
 "$tools/d8" --lib "$android" --min-api 30 --output "$output/dex" \
-  "$output/classes/io/github/droidsleuth/validation/MainActivity.class"
+  "$output"/classes/io/github/droidsleuth/validation/*.class
 "$tools/aapt2" link --manifest "$root/testdata/android/AndroidManifest.xml" \
   -I "$android" -o "$output/base.apk"
 jar uf "$output/base.apk" -C "$output/dex" classes.dex

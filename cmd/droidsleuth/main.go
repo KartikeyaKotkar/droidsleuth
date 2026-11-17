@@ -15,6 +15,7 @@ import (
 
 	"droidsleuth/internal/adb"
 	"droidsleuth/internal/capture"
+	"droidsleuth/internal/investigate"
 	"droidsleuth/internal/session"
 )
 
@@ -94,7 +95,51 @@ func run(ctx context.Context, args []string, out, diagnostic io.Writer) error {
 			ctx, cancel = context.WithTimeout(ctx, *duration)
 			defer cancel()
 		}
-		return capture.Run(ctx, client, meta, capture.Options{Path: *path, Visit: func(r session.Record) error { return printRecord(out, r) }})
+		return capture.Run(ctx, client, meta, capture.Options{Path: *path, Evidence: true, Visit: func(r session.Record) error { return printRecord(out, r) }})
+	case "investigate":
+		asJSON := flags.Bool("json", false, "emit versioned investigation JSON")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 1 {
+			return errors.New("usage: droidsleuth investigate [--json] FILE")
+		}
+		report, err := investigate.Analyze(ctx, flags.Arg(0))
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return json.NewEncoder(out).Encode(report)
+		}
+		if _, err = fmt.Fprintf(out, "Package %q; %d reported events; %d observed disappearances (cause unknown)\n", report.Package, len(report.Findings), report.Disappearances); err != nil {
+			return err
+		}
+		for _, f := range report.Findings {
+			if _, err = fmt.Fprintf(out, "%s reported by %s: process=%q pid=%d device_time_ns=%d detail=%q reason=%v conflict=%t\n", f.Event.Kind, f.Source, f.Event.Process, f.Event.PID, f.Event.DeviceTimeNS, f.Event.Detail, reasonText(f.Event.Reason), f.Conflict); err != nil {
+				return err
+			}
+			for _, ref := range f.Evidence {
+				if _, err = fmt.Fprintf(out, "  evidence: observation #%d lines %d..%d (available through replay --json)\n", ref.Sequence, ref.FirstLine, ref.LastLine); err != nil {
+					return err
+				}
+			}
+			for _, u := range f.Uncertainty {
+				if _, err = fmt.Fprintf(out, "  uncertainty: %s\n", u); err != nil {
+					return err
+				}
+			}
+		}
+		for _, g := range report.Gaps {
+			if err = printRecord(out, g); err != nil {
+				return err
+			}
+		}
+		for _, l := range report.Limitations {
+			if _, err = fmt.Fprintf(out, "Limitation: %s\n", l); err != nil {
+				return err
+			}
+		}
+		return nil
 	case "replay":
 		asJSON := flags.Bool("json", false, "emit metadata followed by observation JSON lines")
 		if err := flags.Parse(args[1:]); err != nil {
@@ -143,8 +188,12 @@ func defaultPath() (string, error) {
 }
 
 func printRecord(out io.Writer, r session.Record) error {
+	if r.Evidence != nil {
+		_, err := fmt.Fprintf(out, "#%d %s evidence: %d reported event(s), truncated=%t\n", r.Sequence, r.Source, len(r.Evidence.Events), r.Evidence.Truncated)
+		return err
+	}
 	if r.Kind == "gap" {
-		_, err := fmt.Fprintf(out, "#%d [%.3f..%.3fs] coverage gap: %q\n", r.Sequence, float64(r.StartElapsedNS)/1e9, float64(r.EndElapsedNS)/1e9, r.Error)
+		_, err := fmt.Fprintf(out, "#%d [%.3f..%.3fs] coverage gap (%s): %q\n", r.Sequence, float64(r.StartElapsedNS)/1e9, float64(r.EndElapsedNS)/1e9, r.Source, r.Error)
 		return err
 	}
 	if r.Snapshot == nil {
@@ -165,4 +214,11 @@ func printRecord(out io.Writer, r session.Record) error {
 		}
 	}
 	return nil
+}
+
+func reasonText(reason *int) string {
+	if reason == nil {
+		return "unspecified"
+	}
+	return fmt.Sprint(*reason)
 }

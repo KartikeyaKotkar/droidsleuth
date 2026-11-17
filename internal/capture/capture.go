@@ -7,17 +7,19 @@ import (
 	"os"
 	"time"
 
+	"droidsleuth/internal/evidence"
 	"droidsleuth/internal/session"
 )
 
 type Options struct {
+	Evidence bool
 	Path     string
 	Interval time.Duration
 	// Visit is called only after a record has committed.
 	Visit func(session.Record) error
 }
 
-// Run uses a single collector and writer: no unbounded queue, overlapping polls,
+// Run uses one snapshot collector and one writer: no unbounded queue, overlapping snapshot polls,
 // or live presentation state can race with persistence. Duration is controlled
 // by ctx. Caller cancellation ends capture cleanly, preserving an interrupted status.
 func Run(ctx context.Context, shell Shell, meta session.Metadata, opts Options) (err error) {
@@ -47,6 +49,54 @@ func Run(ctx context.Context, shell Shell, meta session.Metadata, opts Options) 
 	}()
 	var tracker Tracker
 	var sequence int64
+	appendRecord := func(record session.Record) error {
+		sequence++
+		record.Sequence = sequence
+		if record.StartedUTC.IsZero() {
+			record.StartedUTC = time.Now().UTC()
+		}
+		if record.EndedUTC.IsZero() {
+			record.EndedUTC = record.StartedUTC
+		}
+		record.StartElapsedNS = record.StartedUTC.Sub(started.UTC()).Nanoseconds()
+		record.EndElapsedNS = record.EndedUTC.Sub(started.UTC()).Nanoseconds()
+		writeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := store.Append(writeCtx, record); err != nil {
+			return fmt.Errorf("persist observation: %w", err)
+		}
+		if opts.Visit != nil {
+			if err := opts.Visit(record); err != nil {
+				return err
+			}
+		}
+		if info, err := os.Stat(opts.Path); err != nil {
+			return err
+		} else if info.Size() >= 240<<20 {
+			return errors.New("recording reached the 240 MiB stop threshold (256 MiB database limit)")
+		}
+		return nil
+	}
+	var diagnostics <-chan session.Record
+	if opts.Evidence {
+		var stop func()
+		diagnostics, stop = evidence.Start(ctx, shell, meta)
+		drain := diagnostics
+		defer func() {
+			stop()
+			// Preserve the bounded committed-prefix queue on cancellation.
+			for record := range drain {
+				if e := appendRecord(record); e != nil {
+					err = errors.Join(err, e)
+					break
+				}
+			}
+			for _, source := range []string{"logcat", "exit_history"} {
+				e := appendRecord(session.Record{Kind: "gap", Source: source, Error: "collection ended; final in-flight or delayed source records may be unavailable"})
+				err = errors.Join(err, e)
+			}
+		}()
+	}
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -54,7 +104,6 @@ func Run(ctx context.Context, shell Shell, meta session.Metadata, opts Options) 
 		begin := time.Now()
 		out, collectErr := shell.Shell(ctx, command)
 		end := time.Now()
-		sequence++
 		record := session.Record{Sequence: sequence, StartedUTC: begin.UTC(), EndedUTC: end.UTC(), StartElapsedNS: begin.Sub(started).Nanoseconds(), EndElapsedNS: end.Sub(started).Nanoseconds()}
 		var snapshot session.Snapshot
 		if collectErr == nil {
@@ -67,34 +116,32 @@ func Run(ctx context.Context, shell Shell, meta session.Metadata, opts Options) 
 			record.Kind, record.Snapshot = "snapshot", &snapshot
 			record.Transitions = tracker.Observe(snapshot)
 		}
-		// A canceled collector still records the interrupted observation attempt.
-		writeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		writeErr := store.Append(writeCtx, record)
-		cancel()
-		if writeErr != nil {
-			return fmt.Errorf("persist observation: %w", writeErr)
-		}
-		if opts.Visit != nil {
-			if err := opts.Visit(record); err != nil {
-				return err
-			}
-		}
-		// Leave room for completion metadata and the bounded rollback journal.
-		if info, statErr := os.Stat(opts.Path); statErr != nil {
-			return statErr
-		} else if info.Size() >= 240<<20 {
-			return errors.New("recording reached the 240 MiB stop threshold (256 MiB database limit)")
+		if err := appendRecord(record); err != nil {
+			return err
 		}
 		if ctx.Err() != nil {
 			return nil
 		}
 		// Delay after work deliberately skips missed polls; no catch-up bursts.
 		timer := time.NewTimer(opts.Interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return nil
-		case <-timer.C:
+	waiting:
+		for {
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil
+			case record, ok := <-diagnostics:
+				if !ok {
+					diagnostics = nil
+					continue
+				}
+				if err := appendRecord(record); err != nil {
+					timer.Stop()
+					return err
+				}
+			case <-timer.C:
+				break waiting
+			}
 		}
 	}
 }

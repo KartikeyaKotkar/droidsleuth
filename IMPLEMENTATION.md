@@ -443,3 +443,24 @@ The measured reduction and correctness parity support provisional closure of
 the current main-process performance gate on this device. Residual census/read
 cost remains measurable, and future collectors must be assessed against this
 new baseline. No Milestone 2 features were implemented or started.
+
+## Milestone 2 implementation checkpoint
+
+The user accepted both Milestone 1 gates and authorized evidence-backed crash
+and ANR investigation. The optimized snapshot command is preserved. The research
+plan remains unchanged.
+
+Implementation sequence:
+
+1. Version new recordings as schema 2; retain read-only schema 1 replay.
+2. Add bounded, cancellable filtered logcat tail and scoped exit-history polls.
+   Keep one database writer and independent diagnostic coverage gaps.
+3. Reconstruct source-reported incidents offline, with evidence references,
+   conservative candidate instances, uncertainty and conflicting exit reasons.
+4. Validate deterministic fixtures, fake ADB, cancellation and storage bounds;
+   validate only the disposable application on hardware after command approval.
+5. Measure incremental device and host costs, document limitations, then run
+   the full test, race and vet checks before the milestone decision.
+
+Current work is in progress; this checkpoint does not declare Milestone 2
+complete. No real-device application mutation has occurred for this milestone.

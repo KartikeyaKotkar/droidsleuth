@@ -3,7 +3,7 @@ package session
 
 import "time"
 
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 type Identity struct {
 	BootID     string `json:"boot_id"`
@@ -32,6 +32,8 @@ type Transition struct {
 
 // Record times describe host observation bounds, never an exact process death time.
 type Record struct {
+	Source         string       `json:"source,omitempty"`
+	Evidence       *Evidence    `json:"evidence,omitempty"`
 	Sequence       int64        `json:"sequence"`
 	Kind           string       `json:"kind"`
 	StartedUTC     time.Time    `json:"started_utc"`
@@ -53,4 +55,30 @@ type Metadata struct {
 	StartedUTC time.Time  `json:"started_utc"`
 	EndedUTC   *time.Time `json:"ended_utc,omitempty"`
 	Status     string     `json:"status"`
+}
+
+// Evidence retains only selected-package source text. Event times are device
+// realtime, not host collection times. Unknown timestamps and UIDs stay unknown.
+type Evidence struct {
+	Format    string  `json:"format"`
+	Text      string  `json:"text"`
+	Events    []Event `json:"events"`
+	Truncated bool    `json:"truncated,omitempty"`
+}
+
+type Event struct {
+	Kind              string `json:"kind"`
+	Process           string `json:"process"`
+	PID               int    `json:"pid"`
+	UID               *int   `json:"uid,omitempty"`
+	User              *int   `json:"user,omitempty"`
+	DeviceTimeNS      int64  `json:"device_time_ns,omitempty"`
+	TimeUncertaintyNS int64  `json:"time_uncertainty_ns,omitempty"`
+	RawTime           string `json:"raw_time,omitempty"`
+	BootID            string `json:"boot_id,omitempty"`
+	Reason            *int   `json:"reason,omitempty"`
+	Detail            string `json:"detail,omitempty"`
+	// Lines are one-based references within this observation's source text.
+	FirstLine int `json:"first_line"`
+	LastLine  int `json:"last_line"`
 }
