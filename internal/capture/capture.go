@@ -53,13 +53,19 @@ func Run(ctx context.Context, shell Shell, meta session.Metadata, opts Options) 
 		sequence++
 		record.Sequence = sequence
 		if record.StartedUTC.IsZero() {
-			record.StartedUTC = time.Now().UTC()
+			record.StartedUTC = time.Now()
 		}
 		if record.EndedUTC.IsZero() {
 			record.EndedUTC = record.StartedUTC
 		}
-		record.StartElapsedNS = record.StartedUTC.Sub(started.UTC()).Nanoseconds()
-		record.EndElapsedNS = record.EndedUTC.Sub(started.UTC()).Nanoseconds()
+		// Snapshot bounds were computed directly from monotonic begin/end clocks.
+		// Diagnostic workers keep time.Time's monotonic component until here.
+		if record.Source != "" {
+			record.StartElapsedNS = record.StartedUTC.Sub(started).Nanoseconds()
+			record.EndElapsedNS = record.EndedUTC.Sub(started).Nanoseconds()
+		}
+		record.StartedUTC = record.StartedUTC.UTC()
+		record.EndedUTC = record.EndedUTC.UTC()
 		writeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		if err := store.Append(writeCtx, record); err != nil {

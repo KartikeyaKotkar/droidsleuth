@@ -31,20 +31,27 @@ func UID(s string) (int, bool) {
 	if s == "shell" {
 		return 2000, true
 	}
-	if n, err := strconv.Atoi(s); err == nil && n >= 0 {
+	if n, err := strconv.Atoi(s); err == nil && n >= 0 && int64(n) <= 2147483647 {
 		return n, true
 	}
 	m := androidUID.FindStringSubmatch(s)
 	if m == nil {
 		return 0, false
 	}
-	user, _ := strconv.Atoi(m[1])
-	n, _ := strconv.Atoi(m[3])
+	user, e1 := strconv.Atoi(m[1])
+	n, e2 := strconv.Atoi(m[3])
+	if e1 != nil || e2 != nil || user > 21474 || n > 89999 {
+		return 0, false
+	}
 	base := 10000
 	if m[2] == "i" {
 		base = 99000
 	}
-	return user*100000 + base + n, true
+	result := int64(user)*100000 + int64(base) + int64(n)
+	if result > 2147483647 {
+		return 0, false
+	}
+	return int(result), true
 }
 
 func selected(name, pkg string) bool { return name == pkg || strings.HasPrefix(name, pkg+":") }
@@ -78,7 +85,10 @@ func decode(raw string) (line, bool) {
 	if m == nil {
 		return line{}, false
 	}
-	pid, _ := strconv.Atoi(m[3])
+	pid, err := strconv.Atoi(m[3])
+	if err != nil || pid <= 0 || int64(pid) > 2147483647 {
+		return line{}, false
+	}
 	uid, known := UID(m[2])
 	return line{raw: raw, body: m[7], tag: strings.TrimSpace(m[6]), pid: pid, uid: uid, known: known, ns: epoch(m[1])}, true
 }
@@ -187,7 +197,10 @@ func Logcat(text string, meta session.Metadata, boot string) ([]session.Evidence
 					fatal = true
 				}
 				if m := processLine.FindStringSubmatch(l.body); m != nil {
-					nextPID, _ := strconv.Atoi(m[2])
+					nextPID, parseErr := strconv.Atoi(m[2])
+					if parseErr != nil {
+						conflicting = true
+					}
 					if name != "" && (name != m[1] || pid != nextPID) {
 						conflicting = true
 					}
@@ -202,7 +215,10 @@ func Logcat(text string, meta session.Metadata, boot string) ([]session.Evidence
 					signal = true
 				}
 				if m := nativeProcess.FindStringSubmatch(l.body); m != nil {
-					nextPID, _ := strconv.Atoi(m[1])
+					nextPID, parseErr := strconv.Atoi(m[1])
+					if parseErr != nil {
+						conflicting = true
+					}
 					if name != "" && (name != m[2] || pid != nextPID) {
 						conflicting = true
 					}
@@ -211,8 +227,7 @@ func Logcat(text string, meta session.Metadata, boot string) ([]session.Evidence
 					fatal = true
 				}
 				if m := nativeUID.FindStringSubmatch(l.body); m != nil {
-					uid, _ = strconv.Atoi(m[1])
-					known = true
+					uid, known = UID(m[1])
 				}
 			}
 		}

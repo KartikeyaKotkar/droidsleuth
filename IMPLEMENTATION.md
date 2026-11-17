@@ -617,3 +617,111 @@ repeated to check determinism and leaves source database bytes unchanged.
 
 No logcat-to-death cause inference, TUI, dashboard, network monitor, Perfetto,
 companion service, privileged tombstone retrieval or AI diagnosis was added.
+
+### Incremental collection cost on the physical device
+
+Four 60-second windows ran in baseline/candidate/candidate/baseline order using
+the accepted optimized Milestone 1 binary and the new diagnostic collector. A
+further 60-second baseline/candidate pair used the build with native-signal and
+DST checks. Subsequent malformed-input/metadata-bound guards do not change the
+successful collection commands or polling schedule. The disposable app was idle
+and its identity stable; no crashes or ANRs were induced during cost windows.
+Host measurements include capture and its child ADB clients, excluding the
+shared ADB server. RSS is the peak sampled sum across that process tree, every
+100 ms; very short child peaks can be missed. CPU includes waited child CPU.
+
+The final pair measured:
+
+| Measurement | Milestone 1 | Milestone 2 |
+| --- | ---: | ---: |
+| Successful snapshots | 48 | 48 |
+| Mean snapshot start interval, seconds | 1.253280 | 1.256706 |
+| Snapshot coverage gaps | 0 | 0 |
+| Host CPU, percent of one core | 0.499 | 0.932 |
+| Peak sampled process-tree RSS, KiB | 15632 | 19796 |
+| Final database bytes | 36864 | 53248 |
+| Aggregate device busy CPU, percent | 10.906 | 10.979 |
+
+Milestone 2 added 23 source-status records, seven retained historical exit
+reports and four diagnostic boundary gaps (two startup, two shutdown). There
+were no ongoing source failures in this idle cost window. Host CPU increased by
+about 0.433 percentage points of one core; sampled peak RSS increased by
+4164 KiB, approximately 4.07 MiB. Mean snapshot interval changed by 0.27% in this
+pair. The initial four windows had baseline mean intervals 1.217/1.251 seconds
+and candidate intervals 1.210/1.230 seconds; candidate host CPU was
+1.024/0.995%, versus 0.580/0.502% baseline. These runs support a modest host
+increment without slowing the snapshot schedule materially on this phone.
+
+Whole-device busy CPU varied from 10.9–21.3% in baseline windows and
+11.0–34.4% in candidate windows. Background load, DVFS, screen state and log
+production were uncontrolled. Neither the final pair's small difference nor the
+earlier large difference establishes isolated collector CPU consumption.
+
+Eight randomized rounds additionally timed each actual device operation with
+`/system/bin/time -v sh -c ...`, retaining only timings, RSS and stdout byte
+counts. No unrelated log bodies were saved. Results:
+
+| Operation | Mean device CPU seconds | Mean wall seconds | Maximum command RSS, KiB | Mean stdout bytes |
+| --- | ---: | ---: | ---: | ---: |
+| Empty shell control | 0.023618 | 0.025528 | 4680 | 0 |
+| Boot-ID read | 0.035736 | 0.037546 | 5160 | 37 |
+| Timezone read | 0.031726 | 0.033865 | 4404 | 14 |
+| Initial logcat tail | 0.054626 | 0.092231 | 5056 | 0 |
+| Timestamp-cursor logcat read | 0.050743 | 0.076239 | 5056 | 0 |
+| Scoped exit history | 0.041021 | 0.043126 | 5248 | 3646 |
+
+A steady logcat cycle performs two boot-ID reads plus logcat: approximately
+0.122215 device CPU-seconds including timed shell startup, or 0.051361 above
+three matched empty-shell controls. An exit-history cycle performs timezone
+plus dumpsys: approximately 0.072748 seconds including startup, or 0.025511
+above two controls. Using measured command wall times plus the configured
+post-work delays estimates approximately **4.4% of one core including those
+timed shell costs**, or **1.8% above the matched controls**; on eight CPUs these
+are roughly 0.55% and 0.23% of aggregate capacity. These are estimates, not an
+isolated total or battery benchmark. The timing wrapper adds its own shell
+context, ADB transport time lengthens real intervals, and binder work in
+system_server/logd may not be charged to the timed client. The above-control
+number intentionally excludes shell costs that still occur during collection.
+
+Peak measured command RSS was about 5.1 MiB. This measures the timed command's
+maximum resident set, not simultaneous workers plus Android system services or
+proportional memory. Microbench logcat output was empty during idle measurements;
+heavy crash stacks, high selected-event rates and saturated buffers were not
+resource-benchmarked. The fixture's exit history was small. Bounds and explicit
+loss reporting apply under pressure, but this is not a worst-case resource proof.
+
+### Final checks and milestone decision
+
+`go test ./...`, `go test -race ./...` and `go vet ./...` pass, including the
+fake-ADB end-to-end evidence pipeline, failure/recovery and cancellation tests.
+New metadata and observation reads are bounded to 64 KiB. No dependency was
+added and no adbtop code was copied. The optimized snapshot source has no diff
+against the accepted Milestone 1 implementation.
+
+Offline verification with `PATH=/nonexistent` compared SQLite payloads with
+JSON replay for all 147 initial incident records, 165 corrected validation
+records, 48 final baseline records and 82 final candidate records. All matched
+exactly. Repeated investigation JSON was byte-identical, and database SHA-256
+hashes remained unchanged. These hardware checks supplement the deterministic
+fixtures; no fake or emulator result is presented as hardware evidence.
+
+Implementation checkpoints are `abc5e72` (initial bounded evidence pipeline)
+and `9cf1931` (hardware parser/coverage fixes and regression tests). Final input
+bounds and validation results follow in the closing commit. Capture integration
+retains monotonic elapsed bounds before converting source timestamps to UTC;
+snapshot elapsed bounds remain those computed by the snapshot loop. Raw recordings,
+identifying references and measurement JSON remain private under
+`/tmp/droidsleuth-m2-real`; the committed native fixture removes actual times,
+UIDs, PIDs, boot identifiers, addresses and build information. Cleanup uninstall
+succeeded; subsequent package and PID queries were empty. No physical USB cycle
+or device reboot was repeated in this milestone. Source failure/recovery was
+validated with fake ADB; Milestone 1's prior USB/snapshot result remains unchanged.
+
+**Milestone 2 is complete for this initial evidence-backed investigation scope.**
+It is not a universal crash detector or definitive cause classifier. Missing
+logs/history, delayed or revised reports, unsupported OEM layouts, custom
+process names, historical boot ambiguity and source clock changes can leave
+incidents unresolved. Recommended next step is broader Android/OEM and
+high-volume/rollover validation, with special attention to event-field layouts
+and long recordings, before expanding attribution or beginning another product
+milestone. No later milestone work has started.

@@ -41,7 +41,7 @@ func Start(ctx context.Context, s shell, meta session.Metadata) (<-chan session.
 				}
 			}
 			gap := func(message string, begin time.Time) bool {
-				return emit(session.Record{Kind: "gap", Error: message, StartedUTC: begin.UTC(), EndedUTC: time.Now().UTC()})
+				return emit(session.Record{Kind: "gap", Error: message, StartedUTC: begin, EndedUTC: time.Now()})
 			}
 			if !gap("collection begins with finite retained buffers; earlier coverage unknown", time.Now()) {
 				return
@@ -120,7 +120,7 @@ func Start(ctx context.Context, s shell, meta session.Metadata) (<-chan session.
 					observations = observations[:64]
 					issue = "selected diagnostic observation limit exceeded; coverage incomplete"
 				}
-				if !emit(session.Record{Kind: "source_status", SourceStatus: &session.SourceStatus{ReadSucceeded: issue == "", SelectedObservations: len(observations)}, StartedUTC: begin.UTC(), EndedUTC: time.Now().UTC()}) {
+				if !emit(session.Record{Kind: "source_status", SourceStatus: &session.SourceStatus{ReadSucceeded: issue == "", SelectedObservations: len(observations)}, StartedUTC: begin, EndedUTC: time.Now()}) {
 					return
 				}
 				if issue != "" && !gap(issue, begin) {
@@ -144,7 +144,7 @@ func Start(ctx context.Context, s shell, meta session.Metadata) (<-chan session.
 					}
 					seen[key] = true
 					order = append(order, key)
-					if !emit(session.Record{Kind: "evidence", Evidence: &o, StartedUTC: begin.UTC(), EndedUTC: time.Now().UTC()}) {
+					if !emit(session.Record{Kind: "evidence", Evidence: &o, StartedUTC: begin, EndedUTC: time.Now()}) {
 						return
 					}
 					if o.Truncated && !gap("selected diagnostic excerpt truncated", begin) {

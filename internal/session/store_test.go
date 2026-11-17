@@ -127,3 +127,23 @@ func TestSchemaOneCompatibilityAndEvidenceReferences(t *testing.T) {
 		t.Fatal("source gap changed lifecycle")
 	}
 }
+
+func TestMetadataBounds(t *testing.T) {
+	ctx := context.Background()
+	if s, err := Create(ctx, filepath.Join(t.TempDir(), "too-large.db"), Metadata{Serial: strings.Repeat("x", 65536)}); err == nil {
+		s.Close()
+		t.Fatal("unbounded metadata accepted")
+	}
+	path := filepath.Join(t.TempDir(), "malicious.db")
+	s, err := Create(ctx, path, Metadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.ExecContext(ctx, "UPDATE metadata SET payload=?", strings.Repeat("x", 65537)); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if err = Replay(ctx, path, func(Metadata) error { t.Fatal("oversized metadata reached caller"); return nil }, func(Record) error { return nil }); err == nil {
+		t.Fatal("unbounded metadata replayed")
+	}
+}

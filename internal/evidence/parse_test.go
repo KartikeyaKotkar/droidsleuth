@@ -128,3 +128,15 @@ func TestSanitizedPhysicalNativeFixture(t *testing.T) {
 		t.Fatal("physical native-crash shape not recognized")
 	}
 }
+
+func TestNumericOverflowIsMalformed(t *testing.T) {
+	for _, raw := range []string{"9999999999999999999999999", "u999999999999999999_a123", "u21474_a99999"} {
+		if _, ok := UID(raw); ok {
+			t.Fatalf("overflow UID accepted: %s", raw)
+		}
+	}
+	_, bad := Logcat("1700000000.123456 10123 9999999999999999999999 42 E AndroidRuntime: FATAL EXCEPTION: main", target, "boot")
+	if !bad {
+		t.Fatal("overflow PID accepted")
+	}
+}
