@@ -80,36 +80,59 @@ func SnapshotCommand(pkg string, uid int) (string, error) {
 	if !ValidPackage(pkg) || uid < 0 {
 		return "", errors.New("invalid snapshot target")
 	}
+	// Android mksh's printf is external. Raw print and bulk file substitution
+	// avoid repeated execs; shells without those fast paths retain safe fallbacks.
 	return fmt.Sprintf(`set -e
+if ds_printer=$(command -v print) && [ "$ds_printer" = print ]; then
+  ds_print() { print -r -- "$1"; }
+else
+  ds_print() { printf '%%s\n' "$1"; }
+fi
+ds_read() {
+  ds_value=$(< "$1") || return 1
+  if [ -z "$ds_value" ]; then ds_value=$(cat "$1") || return 1; fi
+  [ -n "$ds_value" ]
+}
 ds_ticks() {
   ds_fields=${1##*) }
   set -- $ds_fields
   [ "$#" -ge 20 ] || return 1
   shift 19
-  printf '%%s' "$1"
+  ds_start_ticks=$1
 }
-printf '__DS_CLOCK__\n'
+ds_print '__DS_CLOCK__'
 date +%%s
-cat /proc/uptime
-printf '__DS_BOOT__\n'
-cat /proc/sys/kernel/random/boot_id
-printf '__DS_PS__\n'
+ds_read /proc/uptime || exit 1
+ds_print "$ds_value"
+ds_print '__DS_BOOT__'
+ds_read /proc/sys/kernel/random/boot_id || exit 1
+ds_print "$ds_value"
+ds_print '__DS_PS__'
 ds_ps=$(ps -A -o PID,UID,NAME)
-printf '%%s\n' "$ds_ps"
-printf '__DS_STAT__\n'
-printf '%%s\n' "$ds_ps" | while read -r ds_pid ds_uid ds_name; do
+ds_print "$ds_ps"
+ds_print '__DS_STAT__'
+ds_print "$ds_ps" | while read -r ds_pid ds_uid ds_name; do
   if [ "$ds_uid" = '%d' ] && [ "$ds_name" = '%s' ]; then
     case "$ds_pid" in ''|*[!0-9]*) exit 1;; esac
-    ds_before=$(cat "/proc/$ds_pid/stat") || exit 1
-    ds_actual_name=$(tr '\000' '\n' < "/proc/$ds_pid/cmdline" | head -n 1)
+    ds_read "/proc/$ds_pid/stat" || exit 1
+    ds_before=$ds_value
+    if IFS= read -r -d '' ds_actual_name < "/proc/$ds_pid/cmdline" 2>/dev/null; then
+      :
+    else
+      ds_actual_name=$(tr '\000' '\n' < "/proc/$ds_pid/cmdline" | head -n 1)
+    fi
     ds_actual_uid=$(sed -n 's/^Uid:[[:space:]]*\([0-9]*\).*/\1/p' "/proc/$ds_pid/status")
     [ "$ds_actual_name" = "$ds_name" ] && [ "$ds_actual_uid" = "$ds_uid" ] || exit 1
-    ds_after=$(cat "/proc/$ds_pid/stat") || exit 1
-    [ "$(ds_ticks "$ds_before")" = "$(ds_ticks "$ds_after")" ] || exit 1
-    printf '%%s\n' "$ds_after"
+    ds_read "/proc/$ds_pid/stat" || exit 1
+    ds_after=$ds_value
+    ds_ticks "$ds_before" || exit 1
+    ds_start_before=$ds_start_ticks
+    ds_ticks "$ds_after" || exit 1
+    [ "$ds_start_before" = "$ds_start_ticks" ] || exit 1
+    ds_print "$ds_after"
   fi
 done
-printf '__DS_END__\n'
+ds_print '__DS_END__'
 `, uid, pkg), nil
 }
 

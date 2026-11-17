@@ -11,7 +11,14 @@ import (
 
 // Execute the generated script against a controlled proc tree, rather than
 // stubbing the complete ADB response. This exercises shell race/error handling.
-func runSnapshotScript(t *testing.T, rows string, psStatus int, secondStat string, grepFailure bool) (string, error) {
+type scriptCase struct {
+	name, rows, secondStat string
+	status, wantProcesses  int
+	wantGap                bool
+	files                  map[string]string
+}
+
+func runSnapshotScript(t *testing.T, tc scriptCase, mode string) (string, error) {
 	t.Helper()
 	dir := t.TempDir()
 	proc := filepath.Join(dir, "proc")
@@ -19,7 +26,7 @@ func runSnapshotScript(t *testing.T, rows string, psStatus int, secondStat strin
 	if err := os.MkdirAll(tools, 0700); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"cat", "tr", "head", "sed", "grep"} {
+	for _, name := range []string{"cat", "tr", "head", "sed"} {
 		path, err := exec.LookPath(name)
 		if err != nil {
 			t.Skipf("shell fixture needs %s", name)
@@ -35,10 +42,13 @@ func runSnapshotScript(t *testing.T, rows string, psStatus int, secondStat strin
 		"proc/101/stat":                  stat,
 		"proc/101/cmdline":               "com.example.app\x00",
 		"proc/101/status":                "Uid:\t10123\t10123\t10123\t10123\n",
-		"ps.txt":                         rows,
-		"second-stat.txt":                secondStat,
+		"ps.txt":                         tc.rows,
+		"second-stat.txt":                tc.secondStat,
 		"tools/ps":                       "#!/bin/sh\n\"$DS_REAL_CAT\" \"$DS_PS_FILE\"\nexit \"$DS_PS_STATUS\"\n",
 		"tools/date":                     "#!/bin/sh\nprintf '1794836454\\n'\n",
+	}
+	for name, body := range tc.files {
+		files[name] = body
 	}
 	for name, body := range files {
 		path := filepath.Join(dir, name)
@@ -49,56 +59,55 @@ func runSnapshotScript(t *testing.T, rows string, psStatus int, secondStat strin
 			t.Fatal(err)
 		}
 	}
-	if secondStat != "" {
-		if err := os.Remove(filepath.Join(tools, "cat")); err != nil {
-			t.Fatal(err)
-		}
-		wrapper := `#!/bin/sh
-if [ "$1" = "$DS_PROC_ROOT/101/stat" ]; then
-  n=0
-  if [ -f "$DS_COUNT" ]; then read -r n < "$DS_COUNT"; fi
-  n=$((n+1))
-  printf '%s\n' "$n" > "$DS_COUNT"
-  if [ "$n" -gt 1 ]; then exec "$DS_REAL_CAT" "$DS_SECOND_STAT"; fi
-fi
-exec "$DS_REAL_CAT" "$@"
-`
-		if err := os.WriteFile(filepath.Join(tools, "cat"), []byte(wrapper), 0700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if grepFailure {
-		if err := os.Remove(filepath.Join(tools, "grep")); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(tools, "grep"), []byte("#!/bin/sh\nexit 2\n"), 0700); err != nil {
-			t.Fatal(err)
-		}
-	}
 	command, err := SnapshotCommand("com.example.app", 10123)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if tc.secondStat != "" {
+		// Change the controlled file immediately before the second stat read;
+		// bulk shell reads do not pass through the fake cat executable.
+		boundary := "    ds_read \"/proc/$ds_pid/stat\" || exit 1\n    ds_after=$ds_value"
+		if !strings.Contains(command, boundary) {
+			t.Fatal("second stat read boundary changed")
+		}
+		command = strings.Replace(command, boundary, "    \"$DS_REAL_CAT\" \"$DS_SECOND_STAT\" > \"$DS_PROC_ROOT/101/stat\"\n"+boundary, 1)
+	}
+	if mode == "native" {
+		// Supply a raw-print builtin equivalent; verify the optimized branch uses
+		// -r and --, rather than interpreting process text as flags or escapes.
+		command = `print() {
+  [ "$1" = -r ] && [ "$2" = -- ] || exit 99
+  shift 2
+  printf '.' >> "$DS_PRINT_CALLS"
+  printf '%s\n' "$1"
+}
+` + command
+	} else {
+		// Exercise portable fallbacks even when the host shell implements the
+		// same redirection/NUL-read extensions as Android mksh.
+		command = strings.ReplaceAll(command, `ds_value=$(< "$1")`, "ds_value=")
+		command = strings.ReplaceAll(command, `if IFS= read -r -d '' ds_actual_name < "/proc/$ds_pid/cmdline" 2>/dev/null; then`, "if false; then")
 	}
 	command = strings.ReplaceAll(command, "/proc/", proc+"/")
 	realCat, _ := exec.LookPath("cat")
 	cmd := exec.Command("/bin/sh", "-c", command)
 	cmd.Env = append(os.Environ(), "PATH="+tools, "DS_REAL_CAT="+realCat,
-		"DS_PS_FILE="+filepath.Join(dir, "ps.txt"), "DS_PS_STATUS="+fmt.Sprint(psStatus),
-		"DS_PROC_ROOT="+proc, "DS_COUNT="+filepath.Join(dir, "count"),
+		"DS_PS_FILE="+filepath.Join(dir, "ps.txt"), "DS_PS_STATUS="+fmt.Sprint(tc.status),
+		"DS_PROC_ROOT="+proc, "DS_PRINT_CALLS="+filepath.Join(dir, "print-calls"),
 		"DS_SECOND_STAT="+filepath.Join(dir, "second-stat.txt"))
 	out, err := cmd.CombinedOutput()
+	if mode == "native" && err == nil {
+		if _, statErr := os.Stat(filepath.Join(dir, "print-calls")); statErr != nil {
+			t.Fatal("native printer branch was not exercised")
+		}
+	}
 	return string(out), err
 }
 
 func TestSnapshotCommandPreservesCensusAndRaceChecks(t *testing.T) {
 	header := "PID UID NAME\n"
 	present := header + "1 0 init\n101 10123 com.example.app\n102 10123 com.example.app:worker\n"
-	for _, tc := range []struct {
-		name, rows, secondStat string
-		status                 int
-		wantProcesses          int
-		wantGap                bool
-	}{
+	for _, tc := range []scriptCase{
 		{name: "present", rows: present, wantProcesses: 1},
 		{name: "absent", rows: header + "1 0 init\n102 10123 com.example.app:worker\n"},
 		{name: "failed census with valid header", rows: header, status: 1, wantGap: true},
@@ -106,21 +115,36 @@ func TestSnapshotCommandPreservesCensusAndRaceChecks(t *testing.T) {
 		{name: "duplicate unrelated PID", rows: present + "1 0 another\n", wantGap: true},
 		{name: "changed target UID", rows: header + "101 10124 com.example.app\n", wantGap: true},
 		{name: "start tick race", rows: present, secondStat: "101 (main) S 1 1 0 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 2000 0 0\n", wantGap: true},
+		{name: "missing target proc", rows: header + "201 10123 com.example.app\n", wantGap: true},
+		{name: "empty stat", rows: present, files: map[string]string{"proc/101/stat": ""}, wantGap: true},
+		{name: "missing UID evidence", rows: present, files: map[string]string{"proc/101/status": ""}, wantGap: true},
+		{name: "UID evidence mismatch", rows: present, files: map[string]string{"proc/101/status": "Uid:\t10124\t10124\t10124\t10124\n"}, wantGap: true},
+		{name: "cmdline mismatch", rows: present, files: map[string]string{"proc/101/cmdline": "com.example.other\x00"}, wantGap: true},
+		{name: "empty cmdline", rows: present, files: map[string]string{"proc/101/cmdline": ""}, wantGap: true},
+		{name: "cmdline arguments", rows: present, files: map[string]string{"proc/101/cmdline": "com.example.app\x00--argument\x00"}, wantProcesses: 1},
+		{name: "literal process text", rows: present + "999 10000 other\\name\n", wantProcesses: 1},
+		{name: "multiple main instances", rows: present + "202 10123 com.example.app\n", wantProcesses: 2, files: map[string]string{
+			"proc/202/stat":    "202 (main) S 1 1 0 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 2000 0 0\n",
+			"proc/202/cmdline": "com.example.app\x00",
+			"proc/202/status":  "Uid:\t10123\t10123\t10123\t10123\n",
+		}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			out, err := runSnapshotScript(t, tc.rows, tc.status, tc.secondStat, false)
-			var count int
-			if err == nil {
-				snapshot, parseErr := ParseSnapshot(out, "com.example.app", 10123)
-				err = parseErr
-				count = len(snapshot.Processes)
-			}
-			if (err != nil) != tc.wantGap {
-				t.Fatalf("gap=%t want %t; error=%v output=%q", err != nil, tc.wantGap, err, out)
-			}
-			if err == nil && count != tc.wantProcesses {
-				t.Fatalf("process count %d want %d", count, tc.wantProcesses)
-			}
-		})
+		for _, mode := range []string{"native", "fallback"} {
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				out, err := runSnapshotScript(t, tc, mode)
+				var count int
+				if err == nil {
+					snapshot, parseErr := ParseSnapshot(out, "com.example.app", 10123)
+					err = parseErr
+					count = len(snapshot.Processes)
+				}
+				if (err != nil) != tc.wantGap {
+					t.Fatalf("gap=%t want %t; error=%v output=%q", err != nil, tc.wantGap, err, out)
+				}
+				if err == nil && count != tc.wantProcesses {
+					t.Fatalf("process count %d want %d", count, tc.wantProcesses)
+				}
+			})
+		}
 	}
 }
