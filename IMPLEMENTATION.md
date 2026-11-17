@@ -125,16 +125,135 @@ overhead and compatibility evidence. Current polls retry the same selected seria
 they never select a replacement device. A changed target UID requires a new
 recording. Missing boot/start-tick access prevents reliable identity capture.
 
-This milestone has not validated real device restarts, cable removal, API 30
-emulators, other OEM builds or low-overhead operation over long recordings.
-Polling can miss short-lived process instances. Suspend/clock discontinuity
-calibration and multi-source event ordering are deferred.
+The disposable-app lifecycle and physical USB cycle have now been validated on
+the device below. API 30 emulators, other OEM builds and device reboots remain
+unverified. Polling can miss short-lived process instances. Suspend/clock
+discontinuity calibration and multi-source event ordering are deferred.
 
-Next recommended step: validate controlled disappearance/relaunch and USB
-disconnection on an explicitly chosen disposable test app, compare the persisted
-timeline with independent ADB observations, and measure collection overhead.
-Stop at that validation gate before expanding source coverage.
+The next step is to reduce and remeasure the sampling overhead documented below
+before expanding source coverage. No optimization or new collector was added
+during this validation gate.
 
 Deferred: crash attribution, ANR detection, logcat collection, exit-history
 parsing, metrics, investigation rules, `investigate --last`, secondary-process
 tracking, a TUI, dashboards, Perfetto and all later milestones.
+
+## Real-device validation gate — 2026-11-16
+
+### Environment and authorization
+
+The validated product code is commit `3a4d451`; fixture source is commit
+`712e3a5`. The host runs Linux on x86-64 with Go 1.27.3. The device is a physical Android phone running Android 17/API 37, build
+`an unbranded Android 17 user build`.
+It has eight online CPUs, `CLK_TCK=100`, and 4096-byte pages. USB debugging was
+authorized and Android user 0 was selected. Root was not used.
+
+The disposable package `io.github.droidsleuth.validation` was absent before
+installation. Its fixture requests no permissions, contains one idle Activity,
+and has no services or application data storage. It was built with JDK 21.0.13,
+Android SDK platform 36/build-tools 36.0.0, minSdk 30 and targetSdk 36. The APK
+SHA-256 is `e2df950464b5ce356258139ec6330f3064b89c9edd76cc5a928d58442b9dd3af`.
+
+The user explicitly approved the following commands before any device mutation:
+
+```sh
+adb -s SERIAL install --user 0 /tmp/droidsleuth-validation-gate/disposable.apk
+adb -s SERIAL shell am start --user 0 -W -n io.github.droidsleuth.validation/.MainActivity
+adb -s SERIAL shell am force-stop --user 0 io.github.droidsleuth.validation
+adb -s SERIAL uninstall io.github.droidsleuth.validation
+```
+
+Installation used no replacement flag. Only the disposable package was launched
+or terminated. The user physically unplugged and reconnected the USB cable after
+a separate ready prompt. No USB mode, networking, debugging authorization, power
+setting or production application was changed. Cleanup uninstall succeeded;
+subsequent package and PID queries returned no matching app.
+
+### Procedure and observations
+
+An idle baseline lasted 60.79 seconds. A single recording then lasted 278.35
+seconds, including a 180.45-second steady capture window, approved force-stop
+and relaunch, a physical USB cycle, and SIGINT finalization. Independent ADB
+references ran every ten seconds during both measurement windows and around
+the lifecycle actions. They read the boot ID, `pidof`, `/proc/PID/stat`, UID from
+`/proc/PID/status`, `/proc/stat` and `/proc/uptime`. USB presence was independently
+polled with `adb devices -l` approximately every two seconds during that test.
+
+- **Initial appearance passed.** Record 1 observed UID 10497, PID 27086 and start
+  ticks 106218123 in boot `BOOT_ID`. Independent ADB
+  returned the same full identity. `appeared` meant first observed, not a claim
+  that process creation occurred at capture start.
+- **Controlled disappearance passed.** Independent ADB returned no PID after
+  force-stop. Record 112 was a complete empty snapshot and emitted only
+  `no_longer_observed`. The recorder did not label a crash, ANR, kill reason or
+  force-stop; the experiment's action log supplies that external ground truth.
+- **Distinct relaunch passed.** Independent ADB and record 118 agreed on UID
+  10497, PID 17339 and start ticks 106280671 in the same boot. Record 118 emitted
+  `appeared`. The recording continued through the absence without opening a new
+  session.
+- **Physical USB recovery passed.** Independent device-list samples bracketed
+  approximately 30.04 seconds of disconnection. Records 146–174 were 29 gaps,
+  with no lifecycle transitions. Record 175 recovered the unchanged full
+  identity and emitted no transition. No fabricated disappearance or restart
+  appeared on reconnect.
+- **Gap semantics passed for unchanged identity.** A gap did not close the old
+  instance. Because there was no identity change on recovery, there was no
+  transition requiring `after_gap=true`. A focused unit test additionally checks
+  that both transitions receive `after_gap=true` when a replacement is first
+  observed after a gap. Replacement while USB is disconnected was not exercised
+  on hardware; that positive branch remains a stated hardware limitation.
+- **Offline replay passed.** All 183 stored observations (153 snapshots and 30
+  gaps) matched JSON replay exactly with `PATH=/nonexistent`. The extra gap was
+  the final canceled read during SIGINT, not another USB failure. The database
+  SHA-256 was unchanged by replay. It contained 102400 bytes and finalized as
+  `interrupted`.
+
+### Cadence and approximate overhead
+
+Continuous successful snapshot start-to-start intervals had a median of 1.607
+seconds, mean 1.626 seconds, p95 1.808 seconds and range 1.219–1.847 seconds.
+Snapshot command durations had a median of 0.608 seconds, mean 0.627 seconds and
+p95 0.807 seconds. These figures exclude gap-spanning intervals. The configured
+one-second post-poll delay does not provide one-Hz sampling.
+
+Host capture/client CPU averaged 0.377% of one CPU over the steady window,
+including waited child clients but excluding the shared ADB server. Peak capture
+RSS was 18108 KiB (17.68 MiB). The low host cost does not establish low device
+cost.
+
+Aggregate device busy CPU was 11.26% during the baseline and 17.03% during steady
+capture, a 5.77-percentage-point increase. This is one sequential comparison on a
+phone with uncontrolled background activity, screen state and DVFS; the full
+increase cannot be causally assigned to DroidSleuth.
+
+To isolate approximate command cost, six read-only snapshot/control pairs ran
+after recording, using Android's `/system/bin/time -p sh -c ...`. Each snapshot
+used the actual `SnapshotCommand` source and the disposable target. Mean device
+user+system CPU was 0.4214 seconds per snapshot and 0.0126 seconds for the empty
+shell control, leaving approximately 0.4088 CPU seconds per snapshot. At the
+observed mean cadence this estimates **25.1% of one CPU**, or **3.14% of eight
+CPUs**, excluding other ADB service work. The short burst and control subtraction
+make this an approximation, not a battery or thermal benchmark.
+
+Mean snapshot output was 27470 bytes: approximately 16.5 KiB/s at the observed
+cadence, excluding transport framing. The timed check discarded unrelated
+process-list content and retained only byte counts and timings.
+
+### Changes, evidence and readiness
+
+No product correctness bug was found and no production Go code was changed.
+Changes are the disposable APK fixture/build script, a targeted post-gap
+replacement unit test, this report and its
+[machine-readable summary](docs/validation/2026-11-16.json). Raw device/session
+artifacts remain private under `/tmp/droidsleuth-validation-gate`; the committed
+summary omits the ADB serial. The research plan is unchanged.
+
+**Correctness passes on this device; the performance gate remains open. Do not
+expand into Milestone 2 collectors yet.** The measured device command cost is
+material for an investigation tool whose observations should minimally perturb
+the target. No numeric overhead threshold was agreed beforehand; this is an
+engineering readiness recommendation, not a claim that a predefined benchmark
+limit failed. Profile and reduce the full-device process census and per-row shell
+work without weakening identity or absence validation, then repeat the paired
+measurement. Also validate replacement during a real coverage gap before
+claiming that branch is hardware-proven.

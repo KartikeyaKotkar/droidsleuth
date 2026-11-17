@@ -102,6 +102,26 @@ func TestIdentityTracking(t *testing.T) {
 			t.Fatalf("absence evidence lost: %+v", events)
 		}
 	})
+	t.Run("replacement after gap preserves uncertainty", func(t *testing.T) {
+		tracker := Tracker{}
+		tracker.Observe(session.Snapshot{BootID: base.BootID, Processes: []session.Process{base}})
+		tracker.Gap()
+		next := base
+		next.PID++
+		next.StartTicks++
+		events := tracker.Observe(session.Snapshot{BootID: next.BootID, Processes: []session.Process{next}})
+		if len(events) != 2 || events[0].Kind != "no_longer_observed" || events[1].Kind != "appeared" {
+			t.Fatalf("replacement evidence changed: %+v", events)
+		}
+		for _, event := range events {
+			if !event.AfterGap {
+				t.Fatalf("post-gap transition lost uncertainty: %+v", event)
+			}
+		}
+		if events[0].Process.Identity != base.Identity || events[1].Process.Identity != next.Identity {
+			t.Fatal("replacement joined different process instances")
+		}
+	})
 }
 
 func FuzzParseSnapshot(f *testing.F) {

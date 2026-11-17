@@ -49,3 +49,7 @@ go test -race ./...
 See [IMPLEMENTATION.md](IMPLEMENTATION.md) for tested functionality, device
 validation, limits and deliberate deferrals. [PLAN.md](PLAN.md) remains the
 research and roadmap brief. Crash attribution, ANRs and a TUI are not implemented.
+
+## License
+
+Released under the [MIT License](LICENSE).
