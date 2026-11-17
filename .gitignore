@@ -1,3 +1,4 @@
 /droidsleuth
 *.db
 *.db-journal
+/.validation/
