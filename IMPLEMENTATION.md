@@ -130,9 +130,9 @@ the device below. API 30 emulators, other OEM builds and device reboots remain
 unverified. Polling can miss short-lived process instances. Suspend/clock
 discontinuity calibration and multi-source event ordering are deferred.
 
-The next step is to reduce and remeasure the sampling overhead documented below
-before expanding source coverage. No optimization or new collector was added
-during this validation gate.
+The initial sampling-overhead concern has been addressed by the optimization
+follow-up below. The original validation results are retained as historical
+evidence. No additional collector or Milestone 2 feature was added.
 
 Deferred: crash attribution, ANR detection, logcat collection, exit-history
 parsing, metrics, investigation rules, `investigate --last`, secondary-process
@@ -247,8 +247,8 @@ replacement unit test, and this report. Raw device/session artifacts remain
 private under `/tmp/droidsleuth-validation-gate`; the committed report omits the
 ADB serial. The research plan is unchanged.
 
-**Correctness passes on this device; the performance gate remains open. Do not
-expand into Milestone 2 collectors yet.** The measured device command cost is
+**Historical decision before optimization: correctness passed, but the performance
+gate remained open.** The measured device command cost was
 material for an investigation tool whose observations should minimally perturb
 the target. No numeric overhead threshold was agreed beforehand; this is an
 engineering readiness recommendation, not a claim that a predefined benchmark
@@ -256,3 +256,190 @@ limit failed. Profile and reduce the full-device process census and per-row shel
 work without weakening identity or absence validation, then repeat the paired
 measurement. Also validate replacement during a real coverage gap before
 claiming that branch is hardware-proven.
+
+## Sampler optimization follow-up: physical-device measurements
+
+### Scope and result
+
+The production change is confined to `SnapshotCommand` in commit `16122e6`.
+The baseline is the production code at `6a1b16f`; its capture implementation is
+unchanged from the accepted first milestone. Regression-test checkpoint
+`f168deb` precedes the optimization.
+
+**The performance gate is ready for provisional closure for the tested phone and
+current main-process scope.** The final paired measurements show 73.6% less
+device CPU per snapshot above the empty-shell control, and an estimated 64.0%
+reduction per recording second after accounting for the faster cadence. This is
+an engineering recommendation based on a substantial measured reduction and
+preserved correctness, not a newly invented numeric acceptance threshold.
+
+Every measurement in this section used the real, unrooted Android 17/API 37
+phone with eight online CPUs. Earlier emulator exploration was excluded from
+these results. Fake ADB was used only for automated regression tests. The
+disposable app, fixture source, SDK build procedure and approved mutation
+commands are the same as in the original validation gate. The app was removed
+afterward; uninstall succeeded and subsequent package/PID queries were empty.
+No phone debugging settings were changed.
+
+### Profiling and rejected approaches
+
+The phone reports `printf` as a tracked alias for `/system/bin/printf`, while
+`print` is a shell builtin. The original single-main-instance script contains
+ten `printf` calls, including its start-tick helpers, in addition to nine other
+external utility invocations. The optimized fast path needs only `date`, `ps`
+and `sed` as external utilities. These are counts of explicit utility
+invocations, not a claim to have traced every fork or kernel syscall.
+
+Component and candidate timings below came from eight randomized rounds on the
+physical device. They include shell startup and must not be added together as
+an exact decomposition; frequency and background load varied between samples.
+
+| Operation | Mean device user+system CPU seconds | Interpretation |
+| --- | ---: | --- |
+| Empty shell control | 0.0166 | Measurement startup baseline |
+| Original clock reads | 0.0798 | `date` and two `cat` invocations |
+| Full `ps` census | 0.0660 | Retained as the absence/discovery source |
+| Census plus row-filter loop | 0.1285 | Pipeline and per-row work add cost |
+| `pidof` | 0.0421 | Faster positive lookup, insufficient absence evidence |
+| UID-constrained `ps -U` | 0.0614 | Little CPU saving; changes what is visible |
+| PID-constrained `ps -p` | 0.0490 | Does not discover a replacement/new PID |
+| Original command with a fixed known PID list | 0.4561 | Removes enumeration but retains formatting/read overhead; not a complete collector |
+| Original full command | 0.5009 | Initial profiling block, distinct from the final A/B block |
+| Native row filtering with `grep` | 0.5521 | Rejected: no CPU improvement |
+| Validating `awk` filter | 0.4952 | Rejected: much smaller output, negligible CPU improvement and another tool dependency |
+
+`pidof` returns no matches when no readable matching command line is found;
+upstream Toybox's `names_to_pid` skips command-line read failures. Its no-match
+status therefore does not distinguish absence from incomplete visibility. A
+cached-PID `/proc` read or constrained PID query cannot discover a new PID.
+UID-only selection could also hide a target UID change that the existing
+collector correctly reports as a gap. None was adopted as an absence shortcut.
+Source inspection used [Toybox pidof](https://github.com/landley/toybox/blob/master/toys/lsb/pidof.c),
+[its enumeration helper](https://github.com/landley/toybox/blob/master/lib/lib.c)
+and [ps selection](https://github.com/landley/toybox/blob/master/toys/posix/ps.c);
+these mutable upstream references support the limitation analysis, rather than
+claiming an exact source match to the installed binary.
+
+### Implemented collection changes and invariants
+
+- Use mksh's raw `print -r --` when available, falling back to `printf` on other
+  shells. Process text remains literal, including backslashes and leading
+  option characters.
+- Read nonempty uptime, boot ID and stat files through shell bulk file
+  substitution. If a shell implements redirection-only substitution as empty
+  output, use `cat`; a read error or genuinely empty required file still fails
+  the snapshot.
+- Read the first NUL-delimited command-line argument with the shell builtin,
+  falling back to the existing `tr`/`head` sequence if that operation fails or
+  is unsupported.
+- Compare bracketing start ticks using the existing helper's result variable,
+  eliminating two output substitutions. UID validation still reads the real
+  UID from `/proc/PID/status` and checks the exact process name.
+
+The full successful `ps -A -o PID,UID,NAME` census is retained on every poll,
+including every unrelated row for host-side validation. Empty/failed targeted
+probes are never converted to absence. A target listed without complete identity
+evidence remains a gap. Identity remains boot ID + UID + PID + start ticks; both
+stat reads still bracket name/UID validation. No PID cache, weaker parser, session
+schema change, transport change or new dependency was introduced.
+
+### Final paired CPU measurements
+
+After the long captures, twelve randomized rounds compared the actual frozen
+baseline and optimized command sources against an empty `sh -c true` control.
+Each generated command was passed as one quoted argument to Android's
+`/system/bin/time -p sh -c`. The runner required a present target and successful
+complete output in every timed snapshot. Only timing values and byte counts
+were retained from the full process-list output.
+
+| Measurement | Baseline | Optimized |
+| --- | ---: | ---: |
+| Mean device CPU seconds including shell startup | 0.616521 | 0.178657 |
+| Mean empty-shell control CPU seconds | 0.021210 | 0.021210 |
+| Mean CPU seconds above control | **0.595310** | **0.157447** |
+| Mean command wall seconds in timed wrapper | 0.609376 | 0.185673 |
+| Mean raw stdout bytes per snapshot | 26535 | 26536 |
+
+The paired CPU reduction above control is **73.55%**. The historical 0.409-second
+estimate came from a different recording; it is not substituted for this run's
+fresh baseline. Conditions visibly changed between profiling blocks, which is
+why the final randomized paired block supplies the comparison.
+
+### Longer recording, host resources and lifecycle parity
+
+A 60.70-second idle control preceded 180.84 seconds of baseline recording and
+180.80 seconds of optimized recording. Independent ADB references ran at the
+same ten-second cadence in each window. They validated a successful full `ps`
+view, compared `pidof` with that view, and read the selected process's UID, boot
+ID and start ticks. The runner required stable independent identities throughout
+each steady window. Snapshot statistics include the startup-verification
+snapshot and the successful prefix through each window's endpoint; CPU windows
+start after verification. An earlier short profiling attempt with no live fixture was
+discarded; the fixture was relaunched before the completed measurements.
+
+| Measurement | Baseline | Optimized |
+| --- | ---: | ---: |
+| Successful observations through steady endpoint | 106 | 145 |
+| Steady-window gaps | 0 | 0 |
+| Mean start-to-start interval, seconds | 1.713526 | 1.257877 |
+| Median start-to-start interval, seconds | 1.767652 | 1.267159 |
+| p95 start-to-start interval, seconds | 1.823027 | 1.303972 |
+| Mean observed command duration, seconds | 0.710907 | 0.256386 |
+| Host capture/client CPU, percent of one CPU | 0.481 | 0.459 |
+| Peak capture RSS, KiB | 13640 | 15720 |
+| Database bytes after recording and lifecycle check | 73728 | 94208 |
+| Aggregate device busy CPU, percent | 13.85 | 11.37 |
+
+Aggregate idle-control device CPU was 11.98%. The optimized window being below
+that control demonstrates uncontrolled background variation; it does not mean
+negative overhead. Host CPU includes waited child ADB clients and excludes the
+shared ADB server. Peak host RSS remained below 16 MiB in both runs.
+
+Using burst CPU cost and observed mean cadence gives an approximate scheduled
+cost of 34.74% versus 12.52% of one CPU, or 4.34% versus 1.56% of eight CPUs.
+That is a **64.0% estimated reduction per recording second**, not a directly
+isolated whole-device utilization or battery measurement. The default remains
+one second of delay after each completed poll; it was not changed to slow down
+collection. Faster polling produces about 36% more observations and raises
+estimated raw payload throughput from 15.1 to 20.6 KiB/s. The larger recording
+and traffic are the explicit tradeoff; per-snapshot output remains unchanged.
+
+Both implementations then underwent the approved disposable-app force-stop and
+relaunch sequence. Both produced exactly `appeared`, `no_longer_observed`, and
+`appeared`, with successful empty snapshots during absence and new identities
+matching independent ADB. No termination cause was inferred. Offline JSON replay
+matched all 118 baseline records and 160 optimized records exactly with no ADB
+on PATH, and replay left each database unchanged. The optimized recording's one
+gap was its final canceled read during SIGINT; the steady window had no gaps.
+
+### Regression proof, limits and closure recommendation
+
+`go test ./...` and `go test -race ./...` pass. Generated-script tests now execute
+against a controlled proc tree, exercising native-equivalent raw printing and
+forced portable fallbacks. Cases cover successful absence, nonzero census status
+despite a valid header, malformed/duplicate unrelated rows, changed UID, missing
+or empty identity data, command-line mismatch/arguments, a start-tick change
+between reads, literal process text, and multiple main instances. Existing
+fake-ADB tests still cover PID reuse, disconnect/reconnect, cancellation,
+coverage-gap persistence and offline replay. No product logic outside the
+collection command changed.
+
+Physical USB was not cycled again during optimization. Its earlier validation
+remains relevant because the transport and tracker are unchanged; reconnection
+and `after_gap` behavior also pass the regression suite. Replacement during an
+actual disconnected interval remains a hardware-testing limitation, not a newly
+claimed result.
+
+This is one Android 17 phone with uncontrolled DVFS, background load and screen
+state. The two long windows were sequential; the CPU microbenchmarks randomized
+order within each round. No power/thermal benchmark or kernel-level tracing was
+performed. Other Android versions/OEM shells were not physically benchmarked;
+portable fallbacks preserve behavior but may retain higher overhead. Published
+figures deliberately exclude emulator and fake-data results. Raw artifacts stay
+private under `/tmp/droidsleuth-opt-real`; no identifying machine-readable
+device report was committed.
+
+The measured reduction and correctness parity support provisional closure of
+the current main-process performance gate on this device. Residual census/read
+cost remains measurable, and future collectors must be assessed against this
+new baseline. No Milestone 2 features were implemented or started.
