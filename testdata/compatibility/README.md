@@ -1,7 +1,7 @@
 # Compatibility fixture provenance
 
 These snippets were reduced from disposable-app observations on the gate's real
-Android emulators: API 30/33/35 AOSP x86_64 and API 37 Google Play x86_64. They are
+Android emulators: API 30/33/35/36 AOSP x86_64 and API 37 Google Play x86_64. They are
 parser regression fixtures, not independent physical-device evidence.
 
 Times, package names, UID/PID/TID values, native thread names/addresses and ANR

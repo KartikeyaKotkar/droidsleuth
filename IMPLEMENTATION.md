@@ -4,7 +4,9 @@
 
 Milestone 1 correctness and performance gates are accepted. Milestone 2 adds
 bounded diagnostic evidence and offline investigation; its implementation,
-validation and limitations are recorded in the final sections below. Earlier
+validation and limitations are recorded in the final sections below. The
+compatibility/reliability gate has completed with a scoped software/emulator
+pass; physical/OEM breadth remains open. Earlier
 Milestone 1 sections retain their historical scope and measurements. PLAN.md
 remains the research and roadmap document.
 
@@ -890,3 +892,169 @@ and API 37 in 203.8 seconds (about 147 writes/s). The shell command forks a logg
 per write, so these rates do not represent logd throughput limits. Synthetic
 10000-record bursts separately exercise the collector's 64-observation limit
 and queue cancellation. No lossless high-volume collection claim is made.
+
+## Compatibility/reliability gate result — 2026-11-18
+
+**Scoped pass:** software reliability checks and real Android emulator validation
+completed for API 30, 33, 35, 36 and 37. This is not a new physical-device or
+multi-OEM certification. No Milestone 3 feature was implemented.
+
+### Reproducible compatibility matrix
+
+All runtime rows below used fresh task-owned x86_64 AVDs, Android user 0,
+ordinary shell UID 2000, two virtual CPU cores and software graphics. API 37
+uses the existing Google Play image; API 30/33/35/36 use AOSP default images.
+The emulator executable was 37.2.13 with KVM on Linux x86-64. The Go compiler
+was 1.27.3 on the same Ryzen 7 4800H host. Requested guest RAM was 2048 MiB;
+the API 37 emulator raised its minimum to 4096 MiB. Boot defaults enlarged
+log buffers; actual buffer metadata is retained in private reference artifacts.
+These emulator policies do not establish production OEM permission behavior.
+
+| API | Evidence class | Runtime duration | Records | Successful snapshots | Java/native/ANR reports | Exit history |
+| --- | --- | ---: | ---: | ---: | --- | --- |
+| 29 | synthetic SDK capability contract only | not booted | — | — | not runtime-tested | unsupported minimum verified by fixture |
+| 30 | Android 11 AOSP emulator | 30 min | 2539 | 1735 | all three observed | reasons 4, 5, 10 observed |
+| 33 | Android 13 AOSP emulator | 30 min | 2454 | 1721 | all three observed | reasons 4, 5, 10 observed |
+| 35 | Android 15 AOSP emulator | 30 min | 2455 | 1723 | all three observed | reasons 4, 5, 10 observed |
+| 36 | Android 16 AOSP emulator | 30 min | 2450 | 1719 | all three observed | reasons 4, 5, 10 observed |
+| 37 | Android 17 Google Play emulator | 2 h, plus 15 min final-parser repeat | 9877 + 1242 | 6737 + 860 | all three observed in both recordings | reasons 4, 5, 10 observed |
+| 37 physical phone | historical Milestone 2 evidence only | no new run | — | — | historical results above | no new measurement |
+| Other OEM firmware/user profiles | untested runtime | — | — | — | synthetic rejection cases only | no availability claim |
+
+The API 30 package was revision 11 (embedded source.properties revision 10);
+API 33/35/36 AOSP images were revision 2. The installed API 37 package metadata
+was revision 8 (embedded source.properties revision 7). Per-run manifests retain
+image properties, shell identity, binary hashes, source hashes and action phases.
+API 33's package contained unresolved extension-level template strings; no
+extension-level capability is inferred from those placeholders. SDK level and
+source capabilities were checked against the running Android instance.
+
+| Format/source case | Proof | Result |
+| --- | --- | --- |
+| Epoch/threadtime/UID Java fatal records | actual snippets from all five emulators; deterministic fixtures | supported with explicit process/PID/UID checks |
+| Native standalone UID/process/signal records, optional `ppid` | actual emulator snippets and historical physical snippet | supported; quoted message text cannot act as headers |
+| Explicit `am_anr` vector | observed on all five emulators | supported with trusted emitter and selected user/process |
+| Nonstandard `am_crash` PID/user ordering | independently observed/reconstructed examples and rejection fixtures | remains rejected with gaps; no field swapping or guessed affected PID |
+| Missing/unknown UID, malformed integers or event framing | deterministic hostile fixtures | rejected/incomplete coverage, not a PID-only fallback |
+| Unknown timezone or ambiguous DST wall time | deterministic fixtures | raw exit time retained; occurrence instant unknown |
+| Shared/custom-named/isolated processes and additional OEM layouts | limited synthetic scope tests; no new runtime certification | original scope limits remain |
+
+No synthetic test is presented as an API runtime, OEM or hardware observation.
+The small fixtures in `testdata/compatibility` derive from the actual emulator
+records, with identifiers and irrelevant detail normalized as documented there.
+The older physical native fixture remains explicitly historical.
+
+### Endurance, interruption, volume and resource results
+
+The real API 37 recording finalized after its two-hour deadline. Read-only
+verification found one failed snapshot followed by the identical complete
+identity and no transition after the approved ADB reconnect. A second interruption
+contained 154 failed snapshot attempts and recovered in a different boot with
+no fabricated old-boot disappearance. Diagnostic gaps had no lifecycle
+transitions. This demonstrates emulator ADB/reboot behavior, not physical USB
+replacement or recovery on a phone.
+
+Across continuous successful same-boot API 37 intervals, excluding gap-spanning
+intervals, mean cadence was 1.045424 seconds, median 1.044638 and p95 1.054105.
+Including the deliberate interruption gives a mean of 1.068843 seconds and is
+not a steady-cadence estimate. The source gaps also include rejected retained
+records; they are not all transport outages. API 30/33/35/36 had no snapshot
+gaps in their completed thirty-minute runs. Their logcat gap counts were
+82/14/14/14 respectively, with two exit-history boundary gaps each. Unsupported
+retained records may cause repeated source gaps until the cursor advances.
+
+Each emulator executed three approved 10000-message unrelated-log loops, for
+150000 attempted writes across the five images. API 33/35/36 needed approximately
+188.8/187.4/202.6 seconds for their 30000 writes. These messages exercised finite
+buffers and cursor movement without becoming stored source evidence. All complete
+recordings were scanned for the injected marker and none contained it. Forced
+rollover/missing markers, duplicates including cache churn, delayed evidence,
+queue backpressure and malformed/truncated inputs are additionally covered by
+deterministic tests. Cross-buffer silent loss remains possible; these tests do
+not establish lossless logcat capture or an exact Android dropped-record count.
+
+The independent two-hour fake-ADB soak completed in 7200.58 seconds: 19567
+committed observations, a 10080256-byte database, 6950 successful snapshots,
+23 deliberate snapshot failures and thousands of injected source failures,
+overwhelming bursts and repeated records. Its live observation hash matched
+full offline replay. At thirty-second samples, Go heap was 1053656–13159016
+bytes and goroutine counts were 7 or 10, with no observed sustained growth.
+A fifteen-minute post-fix repetition completed with 2471 observations and a
+1286144-byte database; sampled heap was 992688–12452360 bytes and goroutines
+4 or 7. The long run began after the initial fixes; later parser refinements
+have focused regressions, the post-fix run, and subsequent actual Android runs.
+It is not claimed that every later edit spent two hours under the original soak.
+
+All-thread ten-second host sampling covered the last 4186.7 seconds of the
+API 37 endurance capture: peak sampled capture/client RSS was 33852 KiB and
+CPU approximately 0.934% of one host core. The final-parser API 37 repeat was
+sampled for 891.5 seconds: peak 32380 KiB and CPU 0.948%. API 33/35/36 measured
+25840/25828/27384 KiB peak sampled trees, with CPU near 0.94%. API 33 monitoring
+covered only the latter portion of its run. Short child peaks and early
+unmonitored phases can be missed. These observations and the explicit payload,
+queue, cache, analysis and database limits support bounded behavior for the
+exercised workloads; they are not a worst-case memory or battery guarantee.
+
+### Acceptance checks, reproduction and limits
+
+The following acceptance checks passed:
+
+- Accepted snapshot constructor/decoder, identity tracker, schema model and
+  PLAN.md have no changes against `52ee5b4`.
+- Identical snapshots produce identical lifecycle transitions with diagnostics
+  absent, malformed, unknown-UID or oversized; only actual snapshot gaps affect
+  lifecycle state. No cause is inferred from disappearance.
+- Uncertain process association remains explicitly unproven; PID reuse,
+  out-of-span timestamps, conflicting exit reasons and clipped analysis results
+  retain uncertainty. Source excerpts and references remain bounded.
+- Source/analysis/transport boundaries, cancellation behind a full queue,
+  failure/recovery, unknown sources and actual 240/256 MiB database boundaries
+  have regression proof. Committed records survive the tested size failures.
+- Schema-1 replay and schema-2 recording/replay remain compatible. All six final
+  runtime recordings replayed exactly with `PATH=/nonexistent`; repeated
+  investigation JSON was byte-identical and source hashes were unchanged.
+- The two fifteen-minute parser fuzz runs completed 7540440 and 7758419
+  executions, respectively, without failure. Focused semantic regressions
+  supplement their ownership, encoding, integer and reference invariants.
+- `go test ./...`, `go test -race ./...` and `go vet ./...` pass.
+
+Useful reproduction commands (resource tests run one package at a time):
+
+```sh
+go test ./...
+go test -race ./...
+go vet ./...
+go test ./internal/evidence -run TestEmulatorProvenanceFixtures -count=1 -v
+DROIDSLEUTH_RESOURCE_TESTS=1 go test ./internal/session -run TestActualSQLiteSizeLimit -count=1 -v
+DROIDSLEUTH_RESOURCE_TESTS=1 go test ./internal/capture -run TestActualCaptureStopThreshold -count=1 -v
+DROIDSLEUTH_SOAK_DURATION=2h go test ./internal/capture -run TestCompatibilitySoak -count=1 -v -timeout=2h5m
+go test ./internal/evidence -run '^$' -fuzz '^FuzzDiagnosticParsers$' -fuzztime=15m -parallel=2
+```
+
+For runtime reproduction, first review/approve the harness's emulator and app
+mutations, build the disposable APK with `scripts/build-validation-apk.sh` into
+its expected `/tmp/droidsleuth-compat-apk` directory, then run
+`python3 scripts/validate-android-emulator.py API` separately for 30/33/35/36,
+or `python3 scripts/validate-android-emulator.py 37 --seconds 7200`.
+Runtime durations, not accelerated fixture time, establish endurance evidence.
+The harness records exact tested artifacts; future SDK revisions are not assumed
+to be identical. No captured user AVD is reused or overwritten.
+
+All task-created AVDs and downloaded API 30/33/35/36 images were removed. Only
+the original `Medium_Phone_API_37.0` AVD remains registered, with no task emulator
+connected. SDK system-image storage returned to its original 2.7 GiB. Small
+private recordings/reports remain under ignored `.validation/compat`; no device
+image or raw identifying phone report was committed.
+
+Remaining limits: no new physical phone, OEM-diverse ROM, secondary Android user,
+physical USB, device CPU/power or worst-case heavy-stack benchmark was performed.
+Production OEM restrictions may differ from AOSP userdebug images even with
+shell UID 2000. Silent logcat loss, finite history, delayed/unknown clocks,
+unsupported layouts and unavailable identity data remain explicit limitations.
+Hot-journal automatic recovery remains outside this gate. Collection fixes apply
+to new captures; old recordings are replayed as recorded and their normalized
+assertions are not retroactively repaired. Review their retained source evidence.
+
+The gate supports the tested software/runtime scope. Broader physical/OEM and
+power validation remains open and requires an authorized real test phone plus
+review of exact mutation commands. Stop here; no Milestone 3 work was started.
