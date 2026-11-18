@@ -132,8 +132,12 @@ func TestUnknownUIDFormatMarksDiagnosticGap(t *testing.T) {
 }
 
 func TestEmulatorProvenanceFixtures(t *testing.T) {
-	for _, api := range []string{"30", "37"} {
-		for _, kind := range []string{"java_fatal", "native_crash", "anr_report", "am_crash-rejected"} {
+	for _, api := range []string{"30", "33", "35", "37"} {
+		kinds := []string{"java_fatal", "native_crash", "anr_report"}
+		if api == "30" || api == "37" {
+			kinds = append(kinds, "am_crash-rejected")
+		}
+		for _, kind := range kinds {
 			t.Run("API"+api+"/"+kind, func(t *testing.T) {
 				raw, err := os.ReadFile(filepath.Join("..", "..", "testdata", "compatibility", "api"+api+"-"+kind+".txt"))
 				if err != nil {

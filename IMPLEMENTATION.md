@@ -839,3 +839,54 @@ for the requested capture duration, replays offline, and removes its task-owned
 AVD/image. It keeps a downloaded image if another AVD references it. Review and
 approve its device-mutating commands before execution. No root or existing user
 AVD is used. The original SDK API 37 image is reused and retained.
+
+### Gate overhead methodology and interim measurements
+
+The baseline is accepted Milestone 2 commit `52ee5b4`, built from a frozen
+archive with the same Go compiler and pinned dependencies. Four sixty-second
+baseline/candidate/candidate/baseline windows ran per emulator after the noise
+workload finished. The endurance observer remained active in both arms. Two
+emulators and other validation work shared the host, so these are approximate
+paired measurements rather than isolated physical-device CPU measurements.
+
+| Runtime | Baseline host CPU (% one core) | Candidate host CPU | Baseline snapshot interval (s) | Candidate interval (s) |
+| --- | ---: | ---: | ---: | ---: |
+| API 30 AOSP | 0.981 | 0.980 | 1.036923 | 1.037340 |
+| API 37 Google Play | 1.019 | 1.002 | 1.046602 | 1.045390 |
+
+All these windows had 58 successful snapshots, zero snapshot gaps and 57344-byte
+recordings. The small CPU differences are within run variation and are not
+claimed as an optimization. Guest busy CPU was approximately 4.4–4.7% on API 30
+and 7.4–8.2% on API 37; these are virtual guest utilization figures and cannot
+substitute for phone CPU/battery overhead. The collection commands and poll
+schedule are unchanged; changes are validation and conservative attribution.
+
+The initial RSS traversal sampled only the main Go thread's child list, which
+can miss subprocesses launched by other Go OS threads. Those RSS values are not
+used as a full-tree bound. A corrected API 37 pair inspected every OS thread's
+child list at 100 ms intervals: baseline/candidate peak sampled tree RSS was
+29696/23736 KiB, host CPU 1.0590/1.0596% of one core, and mean snapshot interval
+1.047996/1.049229 seconds, with 58 successful snapshots and zero gaps in each
+window. Different child overlap and sampling phase prevent treating the RSS
+difference as a memory saving. Independent ten-second all-thread sampling of
+the longer captures supplements this pair; it can still miss short peaks.
+
+The parser benchmark mixes selected ANR records with equally many unrelated
+runtime records, at 100/1000/10000 selected records per batch. These are batch
+sizes, not asserted Android emission rates. Three repetitions produced these
+median results:
+
+| Selected records/batch | Baseline time | Candidate time | Baseline bytes/op | Candidate bytes/op |
+| --- | ---: | ---: | ---: | ---: |
+| 100 | 0.553 ms | 0.555 ms | 111436 | 111444 |
+| 1000 | 5.167 ms | 5.635 ms | 1067301 | 1067727 |
+| 10000 | 55.824 ms | 59.803 ms | 12092680 | 12099794 |
+
+Strict UID/TID/integer/encoding/framing/precision checks add approximately 7–9%
+parser time in the larger batches on this host; allocations are essentially
+unchanged. This is a correctness tradeoff, not a device CPU estimate. Real shell
+log injection on API 30 wrote 30000 records in 147.9 seconds (about 203 writes/s)
+and API 37 in 203.8 seconds (about 147 writes/s). The shell command forks a logger
+per write, so these rates do not represent logd throughput limits. Synthetic
+10000-record bursts separately exercise the collector's 64-observation limit
+and queue cancellation. No lossless high-volume collection claim is made.
