@@ -148,7 +148,7 @@ func Analyze(ctx context.Context, path string) (Report, error) {
 				// Only suggest instances actually observed at the source timestamp, with
 				// second-resolution bounds. Later exit reports deliberately remain unbound.
 				sec := event.DeviceTimeNS / 1e9
-				if event.DeviceTimeNS != 0 && sec >= v.first && sec <= v.last+1 {
+				if event.DeviceTimeNS != 0 && sec >= v.first && sec <= v.last {
 					if len(f.Candidates) < 16 {
 						f.Candidates = append(f.Candidates, id)
 					} else {

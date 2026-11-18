@@ -14,7 +14,7 @@ case "$1" in
   shell)
     [ "$2" = '-T' ] || exit 91
     case "$3" in
-      'getprop ro.build.version.sdk') printf '30\n'; exit 0;;
+       'getprop ro.build.version.sdk') printf '%s\n' "${DROIDSLEUTH_FIXTURE_SDK:-30}"; exit 0;;
       'am get-current-user') printf '0\n'; exit 0;;
       'cmd package list packages -U --user 0 com.example.app')
         printf 'package:com.example.app uid:10123\n'; exit 0;;

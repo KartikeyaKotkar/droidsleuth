@@ -81,3 +81,29 @@ func TestDisappearanceAloneDoesNotProduceCrash(t *testing.T) {
 		t.Fatalf("fabricated diagnosis %+v %v", r, err)
 	}
 }
+
+func TestTimestampOutsideObservedSecondStaysUnbound(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "late.db")
+	s, err := session.Create(ctx, path, session.Metadata{Package: "com.example.app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uid := 10123
+	p := session.Process{Identity: session.Identity{BootID: "boot", UID: uid, PID: 42, StartTicks: 10}, Name: "com.example.app"}
+	if err = s.Append(ctx, session.Record{Sequence: 1, Kind: "snapshot", Snapshot: &session.Snapshot{BootID: "boot", DeviceEpochSeconds: 100, Processes: []session.Process{p}}}); err != nil {
+		t.Fatal(err)
+	}
+	event := session.Event{Kind: "java_fatal", Process: p.Name, PID: 42, UID: &uid, BootID: "boot", DeviceTimeNS: 101999999000, TimeUncertaintyNS: 1000, FirstLine: 1, LastLine: 1}
+	if err = s.Append(ctx, session.Record{Sequence: 2, Kind: "evidence", Source: "logcat", Evidence: &session.Evidence{Text: "delayed report", Format: "fixture", Events: []session.Event{event}}}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	report, err := Analyze(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Findings) != 1 || len(report.Findings[0].Candidates) != 0 {
+		t.Fatal("timestamp outside observed second received an instance candidate")
+	}
+}

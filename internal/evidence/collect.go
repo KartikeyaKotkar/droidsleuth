@@ -72,8 +72,15 @@ func Start(ctx context.Context, s shell, meta session.Metadata) (<-chan session.
 							issue = "logcat read failed or disconnected"
 							previous = ""
 						} else {
-							lines := strings.Split(strings.TrimSpace(raw), "\n")
-							if previous != "" && !strings.Contains(raw, previous) {
+							lines := strings.Split(strings.TrimSuffix(raw, "\n"), "\n")
+							overlap := false
+							for _, rawLine := range strings.Split(strings.TrimSuffix(raw, "\n"), "\n") {
+								if rawLine == previous {
+									overlap = true
+									break
+								}
+							}
+							if previous != "" && !overlap {
 								issue = "logcat tail overlap lost: rollover, truncation or source reset"
 							}
 							if command == LogcatCommand && len(lines) >= 512 {
@@ -116,6 +123,19 @@ func Start(ctx context.Context, s shell, meta session.Metadata) (<-chan session.
 						}
 					}
 				}
+				// Reserve room for the writer's sequence and collection-time envelope.
+				// Oversized normalized fields must not turn source damage into
+				// a fatal SQLite writer error for the whole capture.
+				bounded := observations[:0]
+				for _, o := range observations {
+					body, encodeErr := json.Marshal(o)
+					if encodeErr != nil || len(body) > 60<<10 {
+						issue = "normalized evidence exceeds observation budget; coverage incomplete"
+						continue
+					}
+					bounded = append(bounded, o)
+				}
+				observations = bounded
 				if len(observations) > 64 {
 					observations = observations[:64]
 					issue = "selected diagnostic observation limit exceeded; coverage incomplete"

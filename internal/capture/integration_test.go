@@ -237,3 +237,23 @@ esac
 		t.Fatal("unrelated log persisted")
 	}
 }
+
+// These are synthetic capability-contract cases, not Android runtime evidence.
+func TestSDKContractFixtureMatrix(t *testing.T) {
+	for _, sdk := range []int{29, 30, 33, 35, 36, 37} {
+		t.Run(fmt.Sprint(sdk), func(t *testing.T) {
+			client := fakeClient(t, map[string]string{})
+			t.Setenv("DROIDSLEUTH_FIXTURE_SDK", fmt.Sprint(sdk))
+			meta, err := Probe(context.Background(), client, "com.example.app", 0)
+			if sdk < 30 {
+				if err == nil {
+					t.Fatal("unsupported SDK accepted")
+				}
+				return
+			}
+			if err != nil || meta.SDK != sdk || meta.UID != 10123 {
+				t.Fatalf("capability contract: %+v %v", meta, err)
+			}
+		})
+	}
+}

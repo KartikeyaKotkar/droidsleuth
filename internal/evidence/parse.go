@@ -19,7 +19,7 @@ var androidUID = regexp.MustCompile(`^u([0-9]+)_([ai])([0-9]+)$`)
 var processLine = regexp.MustCompile(`^Process: ([^,]+), PID: ([0-9]+)$`)
 var nativeProcess = regexp.MustCompile(`pid: ([0-9]+), (?:ppid: [0-9]+, )?tid: [0-9]+, name: .* >>> ([^ ]+) <<<'?`)
 var nativeSignal = regexp.MustCompile(`\bsignal [1-9][0-9]* \(SIG[A-Z0-9]+\)`)
-var nativeUID = regexp.MustCompile(`\buid: ([0-9]+)`)
+var nativeUID = regexp.MustCompile(`^uid: ([0-9]+)$`)
 
 func UID(s string) (int, bool) {
 	if s == "root" {
@@ -45,6 +45,9 @@ func UID(s string) (int, bool) {
 	}
 	base := 10000
 	if m[2] == "i" {
+		if n > 999 {
+			return 0, false
+		}
 		base = 99000
 	}
 	result := int64(user)*100000 + int64(base) + int64(n)
@@ -117,6 +120,10 @@ func Logcat(text string, meta session.Metadata, boot string) ([]session.Evidence
 		}
 		l, ok := decode(raw)
 		if !ok {
+			malformed = true
+			continue
+		}
+		if !l.known && (l.tag == "AndroidRuntime" || l.tag == "DEBUG" || l.tag == "am_crash" || l.tag == "am_anr") {
 			malformed = true
 			continue
 		}
@@ -227,7 +234,11 @@ func Logcat(text string, meta session.Metadata, boot string) ([]session.Evidence
 					fatal = true
 				}
 				if m := nativeUID.FindStringSubmatch(l.body); m != nil {
-					uid, known = UID(m[1])
+					nextUID, nextKnown := UID(m[1])
+					if known && (!nextKnown || nextUID != uid) {
+						conflicting = true
+					}
+					uid, known = nextUID, nextKnown
 				}
 			}
 		}

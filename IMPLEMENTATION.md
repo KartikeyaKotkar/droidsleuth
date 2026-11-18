@@ -725,3 +725,66 @@ incidents unresolved. Recommended next step is broader Android/OEM and
 high-volume/rollover validation, with special attention to event-field layouts
 and long recordings, before expanding attribution or beginning another product
 milestone. No later milestone work has started.
+
+## Milestone 2 compatibility and reliability gate (in progress)
+
+The validation plan was reviewed and execution authorized. This gate expands
+validation only; it does not begin Milestone 3. The accepted snapshot collector,
+identity tracker, schema-1 replay and schema-2 recording contracts are protected.
+
+Acceptance: deterministic evidence and explicit uncertainty; diagnostic gaps
+must not change lifecycle transitions; observable loss must remain a gap; bounded
+memory, queues and storage; cancellation reaps owned subprocesses; committed
+prefixes remain replayable; all required tests/race/vet pass. Hardware, emulator
+and synthetic results are recorded separately. Each demonstrated defect must
+first have a reproducer and then a focused regression test.
+
+Resource policy: reuse the installed API 37 image, add at most one older image
+at a time if needed, and remove only task-created temporary images/AVDs after
+validation. Temporary recordings are processed sequentially with a 512 MiB
+working budget; no installed user AVD or existing SDK image will be removed.
+API 30 and API 37 are prioritized for executable coverage; API 29/33/35/36 remain
+explicitly untested unless their images are actually exercised. Synthetic format
+variants never establish OEM or Android-version compatibility.
+
+Planned proof: parser/source limit boundaries, high-volume relevant/unrelated
+traffic, repeated/missing overlap, rollover, duplicates past cache eviction,
+delayed/split reports, clock ambiguity, source interruption/recovery, lifecycle
+isolation, real 240/256 MiB SQLite boundaries, bounded offline analysis, a two-hour
+fake-ADB soak, and disposable emulator captures. Physical measurements require
+a connected authorized phone plus approval of exact fixture commands. Historical
+physical results above are not relabeled as new validation.
+
+### Demonstrated defects and first verified checkpoint
+
+Focused tests reproduced seven failures before fixes:
+
+- A native abort message containing `uid: ...` could override the actual UID
+  field and retain another user's report; native UID parsing now requires the
+  standalone field, and contradictory actual UID fields reject the block.
+- Invalid isolated-UID notation could spill into a different Android user;
+  isolated application IDs now remain within their 99000–99999 range.
+- A previous overlap marker embedded inside another record falsely established
+  continuity; overlap now requires the entire original line, preserving its
+  leading padding.
+- Candidate association included one extra full second beyond the last observed
+  timestamp's precision; evidence outside the actual observed second stays unbound.
+- Oversized normalized fields could exceed SQLite's record limit and terminate
+  capture; the diagnostic producer now rejects evidence over a 60 KiB encoded
+  budget, reserves space for the record envelope and emits a source gap instead.
+- Unknown UID formats could appear to be successful empty diagnostic reads;
+  relevant records with unknown emitter UID now explicitly mark incomplete coverage.
+
+These changes retain evidence requirements, schema 2 and the accepted snapshot
+collector/tracker. Unit, fake-ADB, lifecycle-isolation, race and vet checks pass
+at this checkpoint. Source-only malformed/oversized failures leave exactly the
+same lifecycle transition sequence, including genuine snapshot-gap `after_gap`
+flags, as the same snapshots without diagnostic collectors.
+
+The opt-in real SQLite-size tests created and removed actual large databases:
+the capture stop occurred after 4062 committed observations at 251662336 bytes;
+the SQLite page limit rejected insertion after 4332 committed records at
+268398592 bytes (65527 pages, configured maximum 65536). Finalization and full
+read-only prefix replay succeeded. The test checks SQLite error code 13 rather
+than assuming a driver-specific error string. These are host-storage tests,
+not Android hardware results.
