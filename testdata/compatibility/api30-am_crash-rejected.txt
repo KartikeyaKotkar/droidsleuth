@@ -1,0 +1,1 @@
+1700000000.123456 1000 900 900 I am_crash: [42,0,com.example.app,816332358,java.lang.IllegalStateException,controlled fixture,MainActivity.java,21]

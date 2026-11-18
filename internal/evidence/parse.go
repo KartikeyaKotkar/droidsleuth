@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"droidsleuth/internal/session"
 )
@@ -17,8 +18,8 @@ const TextLimit = 8192
 var header = regexp.MustCompile(`^\s*([0-9]+\.[0-9]+)\s+(\S+)\s+([0-9]+)\s+([0-9]+)\s+([VDIWEFAS])\s+([^:]+):\s?(.*)$`)
 var androidUID = regexp.MustCompile(`^u([0-9]+)_([ai])([0-9]+)$`)
 var processLine = regexp.MustCompile(`^Process: ([^,]+), PID: ([0-9]+)$`)
-var nativeProcess = regexp.MustCompile(`pid: ([0-9]+), (?:ppid: [0-9]+, )?tid: [0-9]+, name: .* >>> ([^ ]+) <<<'?`)
-var nativeSignal = regexp.MustCompile(`\bsignal [1-9][0-9]* \(SIG[A-Z0-9]+\)`)
+var nativeProcess = regexp.MustCompile(`^pid: ([0-9]+), (?:ppid: [0-9]+, )?tid: [0-9]+, name: .* >>> ([^ ]+) <<<'?`)
+var nativeSignal = regexp.MustCompile(`^signal [1-9][0-9]* \(SIG[A-Z0-9]+\)`)
 var nativeUID = regexp.MustCompile(`^uid: ([0-9]+)$`)
 
 func UID(s string) (int, bool) {
@@ -78,9 +79,9 @@ func epoch(s string) int64 {
 
 type line struct {
 	raw, body, tag string
-	pid, uid       int
+	pid, tid, uid  int
 	known          bool
-	ns             int64
+	ns, precision  int64
 }
 
 func decode(raw string) (line, bool) {
@@ -92,8 +93,20 @@ func decode(raw string) (line, bool) {
 	if err != nil || pid <= 0 || int64(pid) > 2147483647 {
 		return line{}, false
 	}
+	tid, err := strconv.Atoi(m[4])
+	if err != nil || tid <= 0 || int64(tid) > 2147483647 {
+		return line{}, false
+	}
 	uid, known := UID(m[2])
-	return line{raw: raw, body: m[7], tag: strings.TrimSpace(m[6]), pid: pid, uid: uid, known: known, ns: epoch(m[1])}, true
+	digits := len(m[1]) - strings.IndexByte(m[1], '.') - 1
+	if digits > 9 {
+		return line{}, false
+	}
+	precision := int64(1)
+	for i := digits; i < 9; i++ {
+		precision *= 10
+	}
+	return line{raw: raw, body: m[7], tag: strings.TrimSpace(m[6]), pid: pid, tid: tid, uid: uid, known: known, ns: epoch(m[1]), precision: precision}, true
 }
 func observation(format, text string, event session.Event) session.Evidence {
 	truncated := len(text) > TextLimit
@@ -118,6 +131,10 @@ func Logcat(text string, meta session.Metadata, boot string) ([]session.Evidence
 		if strings.TrimSpace(raw) == "" || strings.HasPrefix(raw, "---------") {
 			continue
 		}
+		if !utf8.ValidString(raw) {
+			malformed = true
+			continue
+		}
 		l, ok := decode(raw)
 		if !ok {
 			malformed = true
@@ -131,7 +148,11 @@ func Logcat(text string, meta session.Metadata, boot string) ([]session.Evidence
 			if !l.known || (l.uid != 1000 && l.uid != 0) {
 				continue
 			}
-			fields := strings.SplitN(strings.Trim(l.body, "[]"), ",", 5)
+			if !strings.HasPrefix(l.body, "[") || !strings.HasSuffix(l.body, "]") {
+				malformed = true
+				continue
+			}
+			fields := strings.SplitN(l.body[1:len(l.body)-1], ",", 5)
 			if len(fields) < 5 {
 				malformed = true
 				continue
@@ -139,7 +160,7 @@ func Logcat(text string, meta session.Metadata, boot string) ([]session.Evidence
 			user, e1 := strconv.Atoi(strings.TrimSpace(fields[0]))
 			pid, e2 := strconv.Atoi(strings.TrimSpace(fields[1]))
 			name := strings.TrimSpace(fields[2])
-			if e1 != nil || e2 != nil || pid <= 0 {
+			if e1 != nil || e2 != nil || pid <= 0 || int64(pid) > 2147483647 {
 				malformed = true
 				continue
 			}
@@ -150,13 +171,13 @@ func Logcat(text string, meta session.Metadata, boot string) ([]session.Evidence
 			if l.tag == "am_anr" {
 				kind = "anr_report"
 			}
-			result = append(result, observation("logcat-epoch-uid", raw, session.Event{Kind: kind, Process: name, PID: pid, User: &user, DeviceTimeNS: l.ns, TimeUncertaintyNS: 1000, BootID: boot, Detail: "Android event-buffer report"}))
+			result = append(result, observation("logcat-epoch-uid", raw, session.Event{Kind: kind, Process: name, PID: pid, User: &user, DeviceTimeNS: l.ns, TimeUncertaintyNS: l.precision, BootID: boot, Detail: "Android event-buffer report"}))
 			continue
 		}
 		if l.tag != "AndroidRuntime" && l.tag != "DEBUG" {
 			continue
 		}
-		base := fmt.Sprintf("%s/%d", l.tag, l.pid)
+		base := fmt.Sprintf("%s/%d/%d", l.tag, l.pid, l.tid)
 		if l.tag == "AndroidRuntime" && (!l.known || l.uid != meta.UID) {
 			continue
 		}
@@ -205,7 +226,7 @@ func Logcat(text string, meta session.Metadata, boot string) ([]session.Evidence
 				}
 				if m := processLine.FindStringSubmatch(l.body); m != nil {
 					nextPID, parseErr := strconv.Atoi(m[2])
-					if parseErr != nil {
+					if parseErr != nil || nextPID <= 0 || int64(nextPID) > 2147483647 {
 						conflicting = true
 					}
 					if name != "" && (name != m[1] || pid != nextPID) {
@@ -223,7 +244,7 @@ func Logcat(text string, meta session.Metadata, boot string) ([]session.Evidence
 				}
 				if m := nativeProcess.FindStringSubmatch(l.body); m != nil {
 					nextPID, parseErr := strconv.Atoi(m[1])
-					if parseErr != nil {
+					if parseErr != nil || nextPID <= 0 || int64(nextPID) > 2147483647 {
 						conflicting = true
 					}
 					if name != "" && (name != m[2] || pid != nextPID) {
@@ -233,9 +254,14 @@ func Logcat(text string, meta session.Metadata, boot string) ([]session.Evidence
 					name = m[2]
 					fatal = true
 				}
-				if m := nativeUID.FindStringSubmatch(l.body); m != nil {
+				if strings.HasPrefix(l.body, "uid:") {
+					m := nativeUID.FindStringSubmatch(l.body)
+					if m == nil {
+						conflicting = true
+						continue
+					}
 					nextUID, nextKnown := UID(m[1])
-					if known && (!nextKnown || nextUID != uid) {
+					if !nextKnown || (known && nextUID != uid) {
 						conflicting = true
 					}
 					uid, known = nextUID, nextKnown
@@ -253,7 +279,7 @@ func Logcat(text string, meta session.Metadata, boot string) ([]session.Evidence
 			continue
 		}
 		if fatal && (kind != "native_crash" || (signal && first.known && (first.uid == meta.UID || first.uid == 0 || first.uid == 1000))) && known && uid == meta.UID && selected(name, meta.Package) && pid > 0 {
-			result = append(result, observation("logcat-epoch-uid", strings.Join(raws, "\n"), session.Event{Kind: kind, Process: name, PID: pid, UID: &uid, DeviceTimeNS: first.ns, TimeUncertaintyNS: 1000, BootID: boot, Detail: "Explicit diagnostic report; instance identity not supplied by logcat"}))
+			result = append(result, observation("logcat-epoch-uid", strings.Join(raws, "\n"), session.Event{Kind: kind, Process: name, PID: pid, UID: &uid, DeviceTimeNS: first.ns, TimeUncertaintyNS: first.precision, BootID: boot, Detail: "Explicit diagnostic report; instance identity not supplied by logcat"}))
 		}
 	}
 	return result, malformed
@@ -281,12 +307,15 @@ func number(s string) (int, bool) {
 		return 0, false
 	}
 	n, e := strconv.Atoi(v[0])
-	return n, e == nil
+	return n, e == nil && int64(n) >= -2147483648 && int64(n) <= 2147483647
 }
 
 // ExitHistory handles the public dumpsys text surface, not private trace files.
 // OEM formats not recognized here are a coverage gap rather than empty history.
 func ExitHistory(text string, meta session.Metadata, zone string) ([]session.Evidence, error) {
+	if !utf8.ValidString(text) {
+		return nil, fmt.Errorf("exit-history source has invalid UTF-8")
+	}
 	if !strings.Contains(text, "ACTIVITY MANAGER PROCESS EXIT INFO") || strings.Contains(text, "Permission Denial") {
 		return nil, fmt.Errorf("exit-history unavailable or unrecognized")
 	}

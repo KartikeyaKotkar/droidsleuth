@@ -788,3 +788,54 @@ the SQLite page limit rejected insertion after 4332 committed records at
 read-only prefix replay succeeded. The test checks SQLite error code 13 rather
 than assuming a driver-specific error string. These are host-storage tests,
 not Android hardware results.
+
+### Runtime matrix and follow-up parser proof (execution continues)
+
+API 30 AOSP x86_64 completed a real thirty-minute capture through ordinary shell
+UID 2000: 2539 records, 1735 snapshots, Java fatal/native crash/explicit ANR
+reports, four scoped exit reports and no stored injected unrelated log messages.
+All recorded observations replayed exactly with no ADB on PATH; repeated offline
+investigation was deterministic and database hashes remained unchanged. The
+recording finalized as complete. Its task-created AVD and downloaded image were
+removed before proceeding to API 33.
+
+API 37 Google Play x86_64 is undergoing the two-hour real Android capture,
+including 30000 unrelated shell-log writes and a deliberate emulator stop/reboot
+at the same serial. Snapshot and diagnostic failures became gaps; resumed
+snapshots observe the new boot. This is an emulator reboot test, not a physical
+USB test. Both API 30 and API 37 retain Java/native/ANR source reports while
+rejecting the observed nonstandard `am_crash` field ordering. The ANR did not
+itself establish death; a subsequent approved force-stop could produce reported
+user-requested exit reason 10 instead of reason 6. Source claims are not promoted
+to a single termination cause.
+
+Sanitized actual emulator snippets and their provenance are now in
+`testdata/compatibility`. These fixtures retain the relevant syntax, not the
+original timestamps or identifiers. They are separate from the historical
+physical-phone native snippet. Numeric/source availability contract tests for
+API 29/30/33/35/36/37 remain synthetic unless the corresponding runtime row is
+actually executed.
+
+Additional failing-then-passing regressions demonstrated that quoted native
+process/signal markers must not be treated as headers; malformed UID fields
+cannot be repaired by a later field; invalid UTF-8 must not be silently rewritten
+by JSON persistence; affected PIDs must fit Android's signed integer domain;
+source fractional-second precision must not be overstated; interleaved Java
+fatal threads must use distinct PID/TID assembly keys; and truncated event
+vectors must remain gaps. No evidence requirement was relaxed. The normalizer,
+not the accepted snapshot collector/tracker or recording schema, owns these fixes.
+
+A fifteen-minute initial parser fuzz run completed 7540440 executions without a
+failure. A further run and post-fix soak supplement the focused tests; fuzzing is
+software validation only and establishes no Android/OEM hardware compatibility.
+The two-hour fake-ADB soak is independent from the two-hour Android emulator
+recording and its results will be identified separately.
+
+The reproducible disposable runtime harness is
+`scripts/validate-android-emulator.py`. It refuses existing AVD names/serials and
+existing fixture installations, checks SDK and ordinary shell UID, builds the
+current Go code, runs the approved fixture scenarios and volume workload, waits
+for the requested capture duration, replays offline, and removes its task-owned
+AVD/image. It keeps a downloaded image if another AVD references it. Review and
+approve its device-mutating commands before execution. No root or existing user
+AVD is used. The original SDK API 37 image is reused and retained.
