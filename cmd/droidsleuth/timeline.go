@@ -231,6 +231,7 @@ func (p *timelinePrinter) summary(e investigate.IncidentSummary) {
 
 func (p *timelinePrinter) endpoint(label string, e investigate.SnapshotEndpoint) {
 	p.line("  %s #%d [%.3f..%.3fs] device_epoch_seconds=%d", label, e.Sequence, seconds(e.StartElapsedNS), seconds(e.EndElapsedNS), e.DeviceEpochSeconds)
+	p.resources(e.Resources)
 }
 
 func (p *timelinePrinter) observation(row investigate.TimelineObservation, selected string) {
@@ -251,6 +252,7 @@ func (p *timelinePrinter) observation(row investigate.TimelineObservation, selec
 			p.identity(fmt.Sprintf("    %s %q after_gap=%t", t.Kind, t.Process.Name, t.AfterGap), t.Process.Identity)
 		}
 	}
+	p.resources(row.Resources)
 	if s := row.SourceStatus; s != nil {
 		p.line("    Bounded read succeeded=%t selected_observations=%d", s.ReadSucceeded, s.SelectedObservations)
 	}
@@ -258,6 +260,27 @@ func (p *timelinePrinter) observation(row investigate.TimelineObservation, selec
 		if f.ID != selected {
 			p.finding(row.Source, f)
 		}
+	}
+}
+
+func (p *timelinePrinter) resources(m *investigate.ResourceObservation) {
+	if m == nil {
+		return
+	}
+	if m.Raw.Identity == nil {
+		p.line("    Resource sample: %s", m.Raw.Status)
+		return
+	}
+	p.identity("    Resources for", *m.Raw.Identity)
+	if c := m.CPU; c != nil {
+		p.line("      CPU %.1f%% of one logical CPU, interval %.3fs (possible %.3f..%.3fs), observations #%d and #%d", c.PercentOfOneCPU, seconds(c.ElapsedNS), seconds(c.MinElapsedNS), seconds(c.MaxElapsedNS), c.FromSequence, c.ToSequence)
+	} else {
+		p.line("      CPU rate unavailable: %s", m.CPUUnavailable)
+	}
+	if m.RSSBytes != nil {
+		p.line("      Approximate RSS %.2f MiB", float64(*m.RSSBytes)/(1<<20))
+	} else {
+		p.line("      RSS unavailable: %s", m.Raw.RSSUnavailable)
 	}
 }
 

@@ -15,7 +15,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db     *sql.DB
+	schema int
+}
 
 func open(path, mode string) (*sql.DB, error) {
 	abs, err := filepath.Abs(path)
@@ -37,6 +40,12 @@ func open(path, mode string) (*sql.DB, error) {
 
 // Create reserves a new file exclusively; existing recordings are never overwritten.
 func Create(ctx context.Context, path string, meta Metadata) (*Store, error) {
+	if meta.Schema == 0 {
+		meta.Schema = SchemaVersion
+	}
+	if meta.Schema != SchemaVersion && meta.Schema != ResourceSchemaVersion {
+		return nil, fmt.Errorf("unsupported write schema %d", meta.Schema)
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return nil, err
@@ -55,18 +64,18 @@ func Create(ctx context.Context, path string, meta Metadata) (*Store, error) {
 		}
 	}()
 	// Single-writer, durable, bounded database. No growing WAL companion.
-	_, err = db.ExecContext(ctx, `PRAGMA page_size=4096;
+	_, err = db.ExecContext(ctx, fmt.Sprintf(`PRAGMA page_size=4096;
 PRAGMA journal_mode=DELETE;
 PRAGMA synchronous=FULL;
 PRAGMA max_page_count=65536;
 PRAGMA cache_size=-4096;
-PRAGMA user_version=2;
+PRAGMA user_version=%d;
 CREATE TABLE metadata (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL);
-CREATE TABLE observations (sequence INTEGER PRIMARY KEY, payload TEXT NOT NULL);`)
+CREATE TABLE observations (sequence INTEGER PRIMARY KEY, payload TEXT NOT NULL);`, meta.Schema))
 	if err != nil {
 		return nil, err
 	}
-	meta.Schema, meta.Status = SchemaVersion, "recording"
+	meta.Status = "recording"
 	body, err := json.Marshal(meta)
 	if err != nil {
 		return nil, err
@@ -78,12 +87,12 @@ CREATE TABLE observations (sequence INTEGER PRIMARY KEY, payload TEXT NOT NULL);
 		return nil, err
 	}
 	failed = false
-	return &Store{db}, nil
+	return &Store{db: db, schema: meta.Schema}, nil
 }
 
 // Append commits one observation and all its derived transitions atomically.
 func (s *Store) Append(ctx context.Context, record Record) error {
-	if err := validateRecord(record); err != nil {
+	if err := validateRecord(record, s.schema); err != nil {
 		return err
 	}
 	body, err := json.Marshal(record)
@@ -97,7 +106,10 @@ func (s *Store) Append(ctx context.Context, record Record) error {
 	return err
 }
 
-func validateRecord(record Record) error {
+func validateRecord(record Record, version int) error {
+	if err := validateResources(record, version); err != nil {
+		return err
+	}
 	if record.Sequence <= 0 {
 		return errors.New("observation sequence must be positive")
 	}
@@ -202,7 +214,7 @@ func readMetadata(ctx context.Context, q recordingQuery) (Metadata, error) {
 	if err := q.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return Metadata{}, err
 	}
-	if version != 1 && version != SchemaVersion {
+	if version != 1 && version != SchemaVersion && version != ResourceSchemaVersion {
 		return Metadata{}, fmt.Errorf("unsupported session schema %d", version)
 	}
 	var raw sql.NullString
@@ -268,7 +280,7 @@ func readRecord(row interface{ Scan(...any) error }, version int) (Record, error
 	if version == 1 && (record.Source != "" || record.Evidence != nil || record.SourceStatus != nil || record.Kind == "evidence") {
 		return Record{}, errors.New("schema 2 record in schema 1 recording")
 	}
-	if err := validateRecord(record); err != nil {
+	if err := validateRecord(record, version); err != nil {
 		return Record{}, fmt.Errorf("observation %d: %w", seq, err)
 	}
 	return record, nil

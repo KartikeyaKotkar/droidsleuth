@@ -77,8 +77,16 @@ func Probe(ctx context.Context, shell Shell, pkg string, user int) (session.Meta
 // SnapshotCommand performs one bounded, batched shell invocation. The process
 // list and stat reads are observations across an interval, not an atomic census.
 func SnapshotCommand(pkg string, uid int) (string, error) {
+	return snapshotCommand(pkg, uid, false)
+}
+
+func snapshotCommand(pkg string, uid int, resources bool) (string, error) {
 	if !ValidPackage(pkg) || uid < 0 {
 		return "", errors.New("invalid snapshot target")
+	}
+	var before, after, emit string
+	if resources {
+		before, after, emit = resourceTimingBefore, resourceTimingAfter, resourceTimingEmit
 	}
 	// Android mksh's printf is external. Raw print and bulk file substitution
 	// avoid repeated execs; shells without those fast paths retain safe fallbacks.
@@ -123,20 +131,24 @@ ds_print "$ds_ps" | while read -r ds_pid ds_uid ds_name; do
     fi
     ds_actual_uid=$(sed -n 's/^Uid:[[:space:]]*\([0-9]*\).*/\1/p' "/proc/$ds_pid/status")
     [ "$ds_actual_name" = "$ds_name" ] && [ "$ds_actual_uid" = "$ds_uid" ] || exit 1
-    ds_read "/proc/$ds_pid/stat" || exit 1
+%s    ds_read "/proc/$ds_pid/stat" || exit 1
     ds_after=$ds_value
-    ds_ticks "$ds_before" || exit 1
+%s    ds_ticks "$ds_before" || exit 1
     ds_start_before=$ds_start_ticks
     ds_ticks "$ds_after" || exit 1
     [ "$ds_start_before" = "$ds_start_ticks" ] || exit 1
     ds_print "$ds_after"
-  fi
+%s  fi
 done
 ds_print '__DS_END__'
-`, uid, pkg), nil
+`, uid, pkg, before, after, emit), nil
 }
 
 func ParseSnapshot(out, pkg string, uid int) (session.Snapshot, error) {
+	return parseSnapshot(out, pkg, uid, nil)
+}
+
+func parseSnapshot(out, pkg string, uid int, metrics *session.Resources) (session.Snapshot, error) {
 	var snapshot session.Snapshot
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(lines) < 9 || lines[0] != "__DS_CLOCK__" || lines[3] != "__DS_BOOT__" || lines[5] != "__DS_PS__" || lines[len(lines)-1] != "__DS_END__" {
@@ -197,7 +209,14 @@ func ParseSnapshot(out, pkg string, uid int) (session.Snapshot, error) {
 		return snapshot, errors.New("missing stat section")
 	}
 	stats := make(map[int]uint64)
+	var statLine, timingLine string
+	var timingRows int
 	for _, line := range lines[statAt+1 : len(lines)-1] {
+		if metrics != nil && strings.HasPrefix(line, resourceTimingPrefix) {
+			timingRows++
+			timingLine = line
+			continue
+		}
 		pid, ticks, err := ParseStat(line)
 		if err != nil {
 			return snapshot, err
@@ -209,6 +228,9 @@ func ParseSnapshot(out, pkg string, uid int) (session.Snapshot, error) {
 			return snapshot, errors.New("duplicate stat identity")
 		}
 		stats[pid] = ticks
+		if metrics != nil && len(processes) == 1 {
+			statLine = line
+		}
 	}
 	snapshot.Processes = []session.Process{}
 	// Preserve process-list order for reproducible recordings.
@@ -226,27 +248,41 @@ func ParseSnapshot(out, pkg string, uid int) (session.Snapshot, error) {
 		p.StartTicks = ticks
 		snapshot.Processes = append(snapshot.Processes, p)
 	}
+	if metrics != nil {
+		if timingRows != 1 {
+			timingLine = ""
+		}
+		*metrics = resourceFields(snapshot, statLine, timingLine)
+	}
 	return snapshot, nil
 }
 
 // ParseStat reads field 22 after the final ')' because comm may contain spaces
 // and parentheses. Start ticks are an identity token, never converted to time.
 func ParseStat(line string) (int, uint64, error) {
-	open, close := strings.IndexByte(line, '('), strings.LastIndexByte(line, ')')
-	if open < 1 || close < open {
-		return 0, 0, errors.New("malformed process stat")
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(line[:open]))
-	if err != nil || pid <= 0 {
-		return 0, 0, errors.New("invalid stat PID")
-	}
-	fields := strings.Fields(line[close+1:])
-	if len(fields) < 20 || len(fields[0]) != 1 {
-		return 0, 0, errors.New("truncated process stat")
+	pid, fields, err := statFields(line)
+	if err != nil {
+		return 0, 0, err
 	}
 	ticks, err := strconv.ParseUint(fields[19], 10, 64)
 	if err != nil || ticks == 0 {
 		return 0, 0, errors.New("invalid process start ticks")
 	}
 	return pid, ticks, nil
+}
+
+func statFields(line string) (int, []string, error) {
+	open, close := strings.IndexByte(line, '('), strings.LastIndexByte(line, ')')
+	if open < 1 || close < open {
+		return 0, nil, errors.New("malformed process stat")
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(line[:open]))
+	if err != nil || pid <= 0 {
+		return 0, nil, errors.New("invalid stat PID")
+	}
+	fields := strings.Fields(line[close+1:])
+	if len(fields) < 20 || len(fields[0]) != 1 {
+		return 0, nil, errors.New("truncated process stat")
+	}
+	return pid, fields, nil
 }

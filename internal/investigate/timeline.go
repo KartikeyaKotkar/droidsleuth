@@ -69,14 +69,15 @@ type IncidentSummary struct {
 
 type SnapshotEndpoint struct {
 	Bounds
-	BootID              string  `json:"boot_id"`
-	DeviceEpochSeconds  int64   `json:"device_epoch_seconds"`
-	DeviceUptimeSeconds float64 `json:"device_uptime_seconds"`
+	Resources           *ResourceObservation `json:"resources,omitempty"`
+	BootID              string               `json:"boot_id"`
+	DeviceEpochSeconds  int64                `json:"device_epoch_seconds"`
+	DeviceUptimeSeconds float64              `json:"device_uptime_seconds"`
 }
 
 func endpoint(r session.Record) *SnapshotEndpoint {
 	s := r.Snapshot
-	return &SnapshotEndpoint{bounds(r), s.BootID, s.DeviceEpochSeconds, s.DeviceUptimeSeconds}
+	return &SnapshotEndpoint{Bounds: bounds(r), BootID: s.BootID, DeviceEpochSeconds: s.DeviceEpochSeconds, DeviceUptimeSeconds: s.DeviceUptimeSeconds}
 }
 
 type LifecycleIncident struct {
@@ -88,6 +89,7 @@ type LifecycleIncident struct {
 
 type TimelineObservation struct {
 	Bounds
+	Resources      *ResourceObservation  `json:"resources,omitempty"`
 	Kind           string                `json:"kind"`
 	Source         string                `json:"source,omitempty"`
 	Snapshot       *session.Snapshot     `json:"snapshot,omitempty"`
@@ -251,7 +253,6 @@ func timelineDetail(ctx context.Context, r session.Recording, id IncidentID, bef
 	default:
 		return nil, missingAnchor(id)
 	}
-	d.AnchorObservation = contextObservation(row)
 	if err := collectContext(ctx, r, d); err != nil {
 		return nil, err
 	}
@@ -267,11 +268,17 @@ func missingAnchor(id IncidentID) error {
 
 func collectContext(ctx context.Context, r session.Recording, d *IncidentDetail) error {
 	var previous [contextLimit]TimelineObservation
+	var history resourceHistory
 	prior, following, gaps := 0, 0, 0
 	err := r.Scan(ctx, func(row session.Record) error {
+		resources := history.observe(row)
+		if row.Sequence == d.Anchor.Sequence {
+			d.AnchorObservation = contextObservation(row, resources)
+		}
 		if row.Sequence < d.Anchor.Sequence && d.Lifecycle != nil {
 			if row.Snapshot != nil && row.Snapshot.BootID == d.Lifecycle.Transition.Process.BootID && containsIdentity(row.Snapshot, d.Lifecycle.Transition.Process.Identity) {
 				d.Lifecycle.LastPresence = endpoint(row)
+				d.Lifecycle.LastPresence.Resources = resources
 				gaps = 0
 			}
 			if row.Kind == "gap" && row.Source == "" {
@@ -282,11 +289,11 @@ func collectContext(ctx context.Context, r session.Recording, d *IncidentDetail)
 			return nil
 		}
 		if row.Sequence < d.Anchor.Sequence {
-			previous[prior%contextLimit] = contextObservation(row)
+			previous[prior%contextLimit] = contextObservation(row, resources)
 			prior++
 		} else {
 			if following < contextLimit {
-				d.Context = append(d.Context, contextObservation(row))
+				d.Context = append(d.Context, contextObservation(row, resources))
 			}
 			following++
 		}
@@ -317,8 +324,8 @@ func containsIdentity(s *session.Snapshot, id session.Identity) bool {
 	return false
 }
 
-func contextObservation(row session.Record) TimelineObservation {
-	entry := TimelineObservation{Bounds: bounds(row), Kind: row.Kind, Source: row.Source, Snapshot: row.Snapshot, Transitions: row.Transitions, SourceStatus: row.SourceStatus, Error: row.Error}
+func contextObservation(row session.Record, resources *ResourceObservation) TimelineObservation {
+	entry := TimelineObservation{Resources: resources, Bounds: bounds(row), Kind: row.Kind, Source: row.Source, Snapshot: row.Snapshot, Transitions: row.Transitions, SourceStatus: row.SourceStatus, Error: row.Error}
 	if row.Evidence != nil {
 		for i, e := range row.Evidence.Events {
 			entry.Reports = append(entry.Reports, observedFinding(row, i, e))

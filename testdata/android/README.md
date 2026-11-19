@@ -1,7 +1,7 @@
 # Disposable lifecycle validation application
 
 This fixture exists only to validate DroidSleuth against a process without user
-data. It has one idle Activity, no requested permissions, no services, and no
+data. It has one Activity with idle and validation workload modes, no requested permissions, no services, and no
 application persistence. Its package is `io.github.droidsleuth.validation`.
 
 Build locally with JDK tools, Android SDK platform 36 and build-tools 36.0.0:
@@ -20,3 +20,9 @@ Install without a replacement flag so an existing package cannot be overwritten.
 Use an explicit device serial and Android user. A physical USB-disconnection
 test requires a person to unplug and reconnect the cable; resetting an ADB
 transport is not evidence of a physical USB test.
+
+
+The `resources` action touches a 32 MiB direct buffer after four seconds and
+retains it for the activity's lifetime. It starts one CPU worker at eight
+seconds and two workers at 22 seconds. Each phase lasts 12 seconds. Use a fresh
+activity launch so these phases are scheduled once.

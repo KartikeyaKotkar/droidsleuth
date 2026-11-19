@@ -49,11 +49,12 @@ func run(ctx context.Context, args []string, out, diagnostic io.Writer) error {
 		user := flags.Int("user", -1, "Android user ID (default: current user)")
 		path := flags.String("out", "", "new recording file (default: XDG state directory)")
 		duration := flags.Duration("duration", 0, "stop after this duration (default: until interrupted)")
+		resources := flags.Bool("resources", false, "record main-process CPU counters and RSS (schema 3)")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
 		if flags.NArg() != 1 || !capture.ValidPackage(flags.Arg(0)) || *user < -1 || *duration < 0 {
-			return errors.New("usage: droidsleuth watch [--device SERIAL] [--user ID] [--out FILE] [--duration 10s] PACKAGE; flags precede PACKAGE")
+			return errors.New("usage: droidsleuth watch [--device SERIAL] [--user ID] [--out FILE] [--duration 10s] [--resources] PACKAGE; flags precede PACKAGE")
 		}
 		devices, err := client.Devices(ctx)
 		if err != nil {
@@ -94,7 +95,7 @@ func run(ctx context.Context, args []string, out, diagnostic io.Writer) error {
 			ctx, cancel = context.WithTimeout(ctx, *duration)
 			defer cancel()
 		}
-		return capture.Run(ctx, client, meta, capture.Options{Path: *path, Evidence: true, Visit: func(r session.Record) error { return printRecord(out, r) }})
+		return capture.Run(ctx, client, meta, capture.Options{Path: *path, Evidence: true, Resources: *resources, Visit: func(r session.Record) error { return printRecord(out, r) }})
 	case "investigate":
 		return runInvestigate(ctx, flags, args[1:], out, diagnostic)
 	case "replay":
@@ -180,6 +181,34 @@ func printRecord(out io.Writer, r session.Record) error {
 		if _, err := fmt.Fprintf(out, "  %s uid=%d pid=%d start_ticks=%d after_gap=%t (cause unknown)\n", event.Kind, event.Process.UID, event.Process.PID, event.Process.StartTicks, event.AfterGap); err != nil {
 			return err
 		}
+	}
+	if m := r.Resources; m != nil {
+		p := timelinePrinter{out: out}
+		p.line("  Resource sample: %s", m.Status)
+		if m.Identity != nil {
+			if m.UserTicks != nil {
+				p.line("    CPU counters: user=%d system=%d ticks", *m.UserTicks, *m.SystemTicks)
+			}
+			if m.Uptime != nil {
+				p.line("    Device uptime bracket: %d..%d ns", m.Uptime.EarliestNS, m.Uptime.LatestNS)
+			}
+			if m.ClockTicksPerSecond != 0 {
+				p.line("    Clock ticks per second: %d", m.ClockTicksPerSecond)
+			}
+			if m.CPUUnavailable != "" {
+				p.line("    CPU inputs incomplete: %s", m.CPUUnavailable)
+			}
+			if m.RSSPages != nil {
+				p.line("    RSS pages: %d", *m.RSSPages)
+			}
+			if m.PageSizeBytes != 0 {
+				p.line("    Page size: %d bytes", m.PageSizeBytes)
+			}
+			if m.RSSUnavailable != "" {
+				p.line("    RSS unavailable: %s", m.RSSUnavailable)
+			}
+		}
+		return p.err
 	}
 	return nil
 }

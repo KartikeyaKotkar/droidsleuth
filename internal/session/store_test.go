@@ -147,3 +147,63 @@ func TestMetadataBounds(t *testing.T) {
 		t.Fatal("unbounded metadata replayed")
 	}
 }
+
+func TestResourceSchemaRoundTripAndScope(t *testing.T) {
+	ctx := context.Background()
+	id := Identity{BootID: "boot", UID: 10123, PID: 42, StartTicks: 5}
+	zero := uint64(0)
+	row := Record{Sequence: 1, Kind: "snapshot", Snapshot: &Snapshot{BootID: id.BootID, Processes: []Process{{Identity: id}}},
+		Resources: &Resources{Status: ResourceSingle, Identity: &id, UserTicks: &zero, SystemTicks: &zero,
+			ClockTicksPerSecond: 100, Uptime: &UptimeBounds{EarliestNS: 10, LatestNS: 20}, RSSPages: &zero, PageSizeBytes: 16384}}
+	for _, schema := range []int{SchemaVersion, ResourceSchemaVersion} {
+		path := filepath.Join(t.TempDir(), "sample.db")
+		s, err := Create(ctx, path, Metadata{Schema: schema})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if schema == SchemaVersion {
+			if err := s.Append(ctx, row); err == nil {
+				t.Fatal("schema 2 accepted resources")
+			}
+		} else {
+			missing := row
+			missing.Resources = nil
+			if err := s.Append(ctx, missing); err == nil {
+				t.Fatal("schema 3 accepted missing resource status")
+			}
+			wrong := *row.Resources
+			other := id
+			other.StartTicks++
+			wrong.Identity = &other
+			invalid := row
+			invalid.Resources = &wrong
+			if err := s.Append(ctx, invalid); err == nil {
+				t.Fatal("accepted wrong resource identity")
+			}
+			if err := s.Append(ctx, row); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		if err := Replay(ctx, path, func(m Metadata) error {
+			if m.Schema != schema {
+				t.Fatalf("schema %d", m.Schema)
+			}
+			return nil
+		}, func(got Record) error {
+			count++
+			if got.Resources == nil || got.Resources.RSSPages == nil || *got.Resources.RSSPages != 0 {
+				t.Fatal("lost observed zero")
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if (count == 1) != (schema == ResourceSchemaVersion) {
+			t.Fatalf("rows %d for schema %d", count, schema)
+		}
+	}
+}

@@ -12,9 +12,10 @@ import (
 )
 
 type Options struct {
-	Evidence bool
-	Path     string
-	Interval time.Duration
+	Evidence  bool
+	Resources bool
+	Path      string
+	Interval  time.Duration
 	// Visit is called only after a record has committed.
 	Visit func(session.Record) error
 }
@@ -26,12 +27,17 @@ func Run(ctx context.Context, shell Shell, meta session.Metadata, opts Options) 
 	if opts.Interval <= 0 {
 		opts.Interval = time.Second
 	}
-	command, err := SnapshotCommand(meta.Package, meta.UID)
+	command, err := snapshotCommand(meta.Package, meta.UID, opts.Resources)
 	if err != nil {
 		return err
 	}
 	started := time.Now()
 	meta.StartedUTC = started.UTC()
+	meta.Schema = session.SchemaVersion
+	if opts.Resources {
+		meta.Schema = session.ResourceSchemaVersion
+	}
+	var units resourceUnits
 	store, err := session.Create(ctx, opts.Path, meta)
 	if err != nil {
 		return err
@@ -113,14 +119,21 @@ func Run(ctx context.Context, shell Shell, meta session.Metadata, opts Options) 
 		record := session.Record{Sequence: sequence, StartedUTC: begin.UTC(), EndedUTC: end.UTC(), StartElapsedNS: begin.Sub(started).Nanoseconds(), EndElapsedNS: end.Sub(started).Nanoseconds()}
 		var snapshot session.Snapshot
 		if collectErr == nil {
-			snapshot, collectErr = ParseSnapshot(out, meta.Package, meta.UID)
+			if opts.Resources {
+				record.Resources = &session.Resources{}
+			}
+			snapshot, collectErr = parseSnapshot(out, meta.Package, meta.UID, record.Resources)
 		}
 		if collectErr != nil {
 			record.Kind, record.Error = "gap", collectErr.Error()
+			record.Resources = nil
 			tracker.Gap()
 		} else {
 			record.Kind, record.Snapshot = "snapshot", &snapshot
 			record.Transitions = tracker.Observe(snapshot)
+			if record.Resources != nil {
+				units.apply(ctx, shell, record.Resources)
+			}
 		}
 		if err := appendRecord(record); err != nil {
 			return err

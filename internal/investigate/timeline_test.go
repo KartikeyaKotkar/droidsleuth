@@ -22,9 +22,13 @@ type timelineFixture struct {
 }
 
 func newTimelineFixture(t *testing.T) *timelineFixture {
+	return newTimelineFixtureWithSchema(t, session.SchemaVersion)
+}
+
+func newTimelineFixtureWithSchema(t *testing.T, schema int) *timelineFixture {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "timeline.db")
-	s, err := session.Create(context.Background(), path, session.Metadata{Package: "com.example.app", UID: 10123})
+	s, err := session.Create(context.Background(), path, session.Metadata{Schema: schema, Package: "com.example.app", UID: 10123})
 	if err != nil {
 		t.Fatal(err)
 	}

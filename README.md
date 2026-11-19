@@ -19,6 +19,7 @@ files and supported process-list columns.
 go build -o droidsleuth ./cmd/droidsleuth
 ./droidsleuth devices
 ./droidsleuth watch --duration 30s --out session.db com.example.app
+./droidsleuth watch --resources --duration 30s --out resources.db com.example.app
 ```
 
 Flags precede positional arguments. Use `--device SERIAL` for explicit device
@@ -53,10 +54,18 @@ files in the default managed directory and reports newer unfinalized recordings
 it skips. Pass an explicit filename for a custom recording.
 
 Replay is read-only and offline. JSON replay emits one metadata object followed
-by the stored observation rows. New recordings use schema 2, and schema 1
-remains readable. Reported facts, unknown attribution and incomplete coverage
+by the stored observation rows. Plain `watch` writes schema 2. Opt-in `watch --resources` writes schema 3 with
+CPU counters and approximate resident memory for the validated main process.
+Use this binary to read schema 3. It also reads schemas 1 and 2. Reported facts, unknown attribution and incomplete coverage
 are visible in investigation output. The timeline has a separate JSON report
 format identified by `report_type: "incident_timeline"` and `version: 1`.
+
+In a selected incident, CPU is shown as a percentage of one logical CPU
+over a measured device-uptime interval. Multithreaded workloads can exceed
+100%. RSS measures resident memory and may include shared pages. Both metrics
+can be unavailable independently. CPU rates stop across snapshot gaps,
+process replacement, counter resets and ambiguous timing. Metrics are
+observations about the process and do not establish an incident's cause.
 
 Recordings are private files (`0600`), and the default recording directory is
 `0700`. Sessions may contain package names, device serials, timing information

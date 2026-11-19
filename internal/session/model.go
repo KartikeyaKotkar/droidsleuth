@@ -3,7 +3,10 @@ package session
 
 import "time"
 
-const SchemaVersion = 2
+const (
+	SchemaVersion         = 2 // Default recording schema.
+	ResourceSchemaVersion = 3
+)
 
 type Identity struct {
 	BootID     string `json:"boot_id"`
@@ -30,8 +33,28 @@ type Transition struct {
 	AfterGap bool    `json:"after_gap,omitempty"`
 }
 
+// Resources holds raw observations from the stat read used to validate identity.
+type Resources struct {
+	Status              string        `json:"status"`
+	Identity            *Identity     `json:"identity,omitempty"`
+	UserTicks           *uint64       `json:"user_ticks,omitempty"`
+	SystemTicks         *uint64       `json:"system_ticks,omitempty"`
+	ClockTicksPerSecond uint64        `json:"clock_ticks_per_second,omitempty"`
+	Uptime              *UptimeBounds `json:"uptime,omitempty"`
+	RSSPages            *uint64       `json:"rss_pages,omitempty"`
+	PageSizeBytes       uint64        `json:"page_size_bytes,omitempty"`
+	CPUUnavailable      string        `json:"cpu_unavailable,omitempty"`
+	RSSUnavailable      string        `json:"rss_unavailable,omitempty"`
+}
+
+type UptimeBounds struct {
+	EarliestNS int64 `json:"earliest_ns"`
+	LatestNS   int64 `json:"latest_ns"`
+}
+
 // Record times describe host observation bounds, never an exact process death time.
 type Record struct {
+	Resources      *Resources    `json:"resources,omitempty"`
 	SourceStatus   *SourceStatus `json:"source_status,omitempty"`
 	Source         string        `json:"source,omitempty"`
 	Evidence       *Evidence     `json:"evidence,omitempty"`
