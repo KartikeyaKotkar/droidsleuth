@@ -1397,3 +1397,131 @@ gate. The disposable package was uninstalled and verified absent. No product
 code change was needed. `go test ./...`, `go test -race ./...` and
 `go vet ./...` passed. Raw artifacts are in ignored
 `.validation/resources-phone`.
+
+## Terminal-first incident investigation
+
+The interactive slice of PLAN.md §3.E is available through
+`investigate --tui (FILE | --last)`. It uses the same finalized recording
+reader, incident index, timeline facts and association analysis as the CLI.
+`--incident ID` opens a particular timeline, with optional initial
+`--before` and `--after` bounds. The browser is opt-in. The CLI's
+text and JSON formats and schemas 1–3 remain compatible. It needs a TTY
+on stdin and stdout. Redirected users can use `--timeline` or
+`--timeline --json`.
+
+The incident index supports navigation, paging and direct entry of a bounded
+canonical ID beyond the index cap. The selected timeline marks the anchor,
+retains recording sequence and keeps host collection bounds distinct from
+device occurrence timestamps. Users can scroll the context, cycle between
+30-second, two-minute and five-minute symmetric windows, and inspect any
+retained observation. The view exposes source-specific coverage gaps,
+omitted context, incomplete analysis, conflicting reports and unproven
+instance associations. Snapshot and lifecycle details show CPU as a percentage
+of one logical CPU with interval bounds and endpoint sequences. RSS is
+approximate and its availability is independent of CPU. Disappearance remains
+cause unknown. Resource samples and nearby reports provide context.
+
+The evidence inspector reopens the finalized file read-only and checks each
+requested sequence and exact one-based range against an event in the stored
+record. It shows the stored source, format, line numbers and capture truncation.
+Untrusted recording text is escaped before wrapping or styling, including
+C0/C1, DEL, escape sequences and bidi controls. Backslashes in source lines
+are escaped so their original occurrence is distinguishable from displayed
+control escapes.
+
+Bubble Tea v1.3.7 handles keyboard input, resize events and the alternate
+screen. Lip Gloss v1.1.0 styles the header. The pinned graph's terminal and
+ANSI packages handle raw terminal state and cell widths. The browser pauses
+navigation below 40 columns by 10 rows and keeps the current selection
+through resize. Quit, Ctrl+C, Ctrl+D, terminal EOF, SIGTERM and errors all
+leave the loader cancelled. Terminal setup and output failures unwind
+through a terminal restoration path. An unreadable initial recording exits
+with a diagnostic. Recoverable detail or evidence errors allow Back or Retry.
+
+The browser retains at most the existing 4,096 index entries, one detail
+with 100 observations per side, and one stored source slice from an
+8 KiB evidence record. Related links are bounded by the existing per-record
+and per-finding limits. Only viewport rows are rendered for the index and
+timeline. One worker performs a read at a time, with a single pending slot
+for the latest request. Completed reads from abandoned selections are
+discarded. Each read checks the opening file's identity, size and
+modification time before and after the read, in addition to the
+transaction's checks. A detected replacement requires reopening.
+
+### Verification
+
+All three implementation phases passed focused tests. The final
+`go test ./...`, `go test -race ./...`, `go vet ./...` and
+`go mod verify` passed on Linux with Go 1.23.12. The complete selected module
+graph resolves on Go 1.23 and no module declares a later Go version.
+Deterministic tests cover index and timeline selection, window changes,
+verified evidence range rejection, independent resource availability,
+unproven associations, diagnostic isolation, terminal escaping, stale
+results, retry, cancellation and file replacement. A synthetic schema-1
+recording also passed the terminal lifecycle workflow.
+
+The Linux PTY smoke test in `scripts/validate-tui.py` passed on a retained
+API 37 emulator diagnostic recording and both retained schema-3 workload
+recordings. It exercised opening an incident by ID, evidence selection,
+resize to a 20×5 terminal and back, keyboard navigation through `--last`,
+normal quit, Ctrl+C, Ctrl+D, SIGTERM and the unreadable-recording path. It
+checked alternate-screen exit and exact terminal attribute restoration.
+A separate run checked the resource context on the retained schema-3
+phone recording. These are offline checks on existing artifacts.
+
+With ADB absent from PATH, eight retained files produced byte-identical
+legacy and timeline text/JSON indexes against commit `6e283e0`. Repeated
+selected timeline JSON also matched for each recorded incident kind.
+Those files include API 30, 33, 35, 36 and 37 emulator data, one emulator
+CPU/RSS workload, and one historical physical API 37 CPU/RSS workload.
+All eight retained files kept their SHA-256, sizes and modification times.
+No fresh emulator or phone capture was required.
+
+### Performance
+
+Both binaries were built with Go 1.23.12 on the Linux x86-64 reference host
+(AMD Ryzen 7 4800H). The representative benchmark uses the retained API 37
+emulator session extended to 10,000 rows with ordinary source-status rows
+(4,370,432 bytes). The near-limit case adds 60 KiB synthetic diagnostic
+gaps until the 256 MiB SQLite page cap stops inserts (14,262 rows,
+268,414,976 bytes). Both cases inspected the same lifecycle anchor.
+The database files were temporary and warm in the OS cache.
+
+Five pairs per mode and input alternated CLI-first and TUI-first.
+CLI measurements use `6e283e0` with equivalent timeline JSON output to a
+sink, timed to process exit. TUI measurements use process launch through
+the first loaded PTY frame, including presentation. The RSS figures are
+the largest Linux `VmHWM` readings sampled about every 2 ms. Exit can race
+the last sample. All results reflect this host and workload.
+
+| Input and view | CLI median | TUI median (max) | CLI peak RSS | TUI peak RSS | RSS delta |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Representative index | 0.108 s | 0.120 s (0.121 s) | 21,392 KiB | 22,576 KiB | +1.16 MiB |
+| Representative detail | 0.308 s | 0.305 s (0.321 s) | 21,876 KiB | 22,936 KiB | +1.04 MiB |
+| Near-limit index | 2.059 s | 2.087 s (2.103 s) | 21,620 KiB | 22,540 KiB | +0.90 MiB |
+| Near-limit detail | 6.186 s | 6.206 s (6.372 s) | 22,568 KiB | 24,488 KiB | +1.88 MiB |
+
+With the near-limit detail already loaded, 60 keyboard movements had
+17.23 ms p95 from PTY input to the updated selection. Sixty resizes
+between 110×28 and 78×18 had 17.20 ms p95 to the next visible frame.
+These timings include the renderer's frame scheduling. Five quits initiated
+during a near-limit load completed in 15.62–15.98 ms, including screen and
+terminal restoration. A deterministic rapid-window test observed one active
+worker, one latest pending request, cancellation of the superseded worker
+and suppression of its result.
+
+All measured loads met the approved 2-second representative and 30-second
+near-limit limits. Both frame p95s were below 50 ms. Peak sampled RSS rose
+by at most 1.88 MiB against the 16 MiB allowance. Raw artifacts, the
+measurement harness and the verified module graph are in ignored
+`.validation/tui`.
+
+### Remaining limitations
+
+Large index and detail requests still scan the recording through the existing
+investigation API. Window changes reload those facts in the background.
+Context, analysis and evidence limits can omit information. The UI retains
+their omission and truncation indicators and points to CLI replay for stored
+observations. Live recording, search, dashboards and hot-journal recovery
+remain outside this milestone. The underlying diagnostic coverage and Android
+compatibility limits described above still apply.
