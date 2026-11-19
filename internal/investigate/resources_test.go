@@ -87,3 +87,19 @@ func TestResourceTimelineKeepsBaselineOutsideWindow(t *testing.T) {
 		t.Fatalf("unexpected detail: %+v", d)
 	}
 }
+
+func TestRSSFailureDoesNotHideCPURate(t *testing.T) {
+	id := session.Identity{BootID: "boot", UID: 10123, PID: 77, StartTicks: 123}
+	var h resourceHistory
+	row := resourceRow(1, time.Second, id, 0, 0, 17)
+	row.Resources.PageSizeBytes = 4096
+	if got := h.observe(row); got.RSSBytes == nil || *got.RSSBytes != 17*4096 {
+		t.Fatalf("wrong 4 KiB page conversion: %+v", got)
+	}
+	row = resourceRow(2, 2*time.Second, id, 0, 0, math.MaxUint64)
+	row.Resources.RSSUnavailable = row.Resources.RSSInputIssue()
+	if got := h.observe(row); got.RSSBytes != nil || got.Raw.RSSUnavailable != "rss_overflow" ||
+		got.CPU == nil || got.CPU.PercentOfOneCPU != 0 {
+		t.Fatalf("RSS failure hid an observed zero CPU rate: %+v", got)
+	}
+}

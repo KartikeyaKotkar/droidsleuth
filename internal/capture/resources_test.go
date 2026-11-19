@@ -2,6 +2,7 @@ package capture
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -165,5 +166,59 @@ func TestResourcesThroughFakeADBWithReboot(t *testing.T) {
 	last := rows[3].Resources
 	if last.ClockTicksPerSecond != 0 || last.RSSUnavailable != "" || last.CPUUnavailable != "clock_ticks_unavailable" {
 		t.Fatalf("cached units crossed boots or unavailable CPU affected RSS: %+v", last)
+	}
+}
+
+func TestResourceUnitProbeCanceledAfterValidSnapshot(t *testing.T) {
+	present := strings.Replace(fixture(t, "snapshot-present.txt"), "__DS_END__", "__DS_RESOURCE__ 101 10.00 10.01\n__DS_END__", 1)
+	client := fakeClient(t, map[string]string{"1.stdout": present, "2.block": ""})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	path := filepath.Join(t.TempDir(), "canceled-probe.db")
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, client, session.Metadata{Package: "com.example.app", UID: 10123}, Options{Path: path, Resources: true})
+	}()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+waiting:
+	for {
+		select {
+		case <-deadline.C:
+			t.Fatal("unit probe did not start")
+		case <-tick.C:
+			if _, err := os.Stat(filepath.Join(filepath.Dir(client.Path), "pid")); err == nil {
+				break waiting
+			}
+		}
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("canceled unit probe did not exit")
+	}
+	rows := 0
+	err := session.Replay(context.Background(), path, func(m session.Metadata) error {
+		if m.Status != "interrupted" {
+			t.Fatalf("unexpected final status %s", m.Status)
+		}
+		return nil
+	}, func(r session.Record) error {
+		rows++
+		if r.Snapshot == nil || len(r.Transitions) != 1 || r.Transitions[0].Kind != "appeared" ||
+			r.Resources == nil || r.Resources.CPUUnavailable != "clock_ticks_unavailable" ||
+			r.Resources.RSSUnavailable != "page_size_unavailable" {
+			t.Fatalf("probe cancellation changed the validated sample: %+v", r)
+		}
+		return nil
+	})
+	if err != nil || rows != 1 {
+		t.Fatalf("replay rows=%d err=%v", rows, err)
 	}
 }

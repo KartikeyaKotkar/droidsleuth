@@ -1154,3 +1154,134 @@ replacement during disconnect, battery and thermal behavior, custom/isolated
 processes and automatic hot-journal recovery remain open. Timeline analysis
 depends only on the observations already recorded. Historical assertions
 retain their original source evidence and uncertainty.
+
+## Per-process CPU and RSS
+
+`watch --resources` writes schema 3 and attaches one resource observation to
+each successful snapshot. Plain `watch` writes schema 2. Current readers
+accept schemas 1–3. Schema 3 uses the existing SQLite tables and atomic
+snapshot append. Earlier binaries reject it as unsupported. Existing files
+require no migration.
+
+The optional resource frame reuses the final `/proc/PID/stat` read that
+already passed the census and kernel start-tick checks. It represents the
+same full boot ID, UID, PID and start-tick identity as the validated process
+snapshot. Zero or multiple main-process matches have an explicit status.
+Only the first candidate gets two additional best-effort uptime reads in
+the batched snapshot command. A successful singleton yields raw stat
+fields 14 and 15 in ticks and field 24 in pages. Optional timing or metric
+failures do not change the lifecycle result. Mandatory framing, identity or
+transport failures still yield snapshot gaps. The disabled command template
+matches commit `03d3d37` byte for byte.
+
+One bounded unit probe verifies the snapshot's boot ID on both sides of
+`getconf CLK_TCK` and `getconf PAGESIZE` (or `PAGE_SIZE`). Each valid unit is
+cached independently until the boot changes. Missing units retry at most
+once per minute on eligible snapshots. The steady poll uses the same one
+ADB call when units are cached. No host units or fixed device units are
+assumed.
+
+Replay exposes raw inputs and independent CPU/RSS availability. Incident
+detail derives CPU from the difference in user and system ticks across two
+samples of the same identity, divided by device clock ticks per second and
+the midpoint elapsed device uptime. The result uses one logical CPU as
+100%. It includes the source sequence references and the possible elapsed
+interval from the uptime brackets, including uptime's display precision.
+Device uptime includes suspend. Accounting and counter quantization also
+affect accuracy. An overlapping or reversed interval, a bracket wider
+than 250 ms, or a possible interval over five seconds suppresses the rate.
+Snapshot gaps, unavailable CPU inputs, resets and identity changes also
+prevent a rate across the break. Diagnostic gaps leave CPU continuity intact.
+
+RSS is an approximate resident footprint that can include shared pages.
+The timeline independently converts pages to bytes when the unit is known
+and the product fits. Last observed presence shows resources for the
+identity that disappeared. Context retains measurements for replacement
+identities separately. Resource values leave incident IDs, evidence
+references and cause attribution unchanged. Existing cancellation,
+64 KiB record, 240 MiB stop and 256 MiB database limits still apply.
+
+### Correctness validation
+
+Focused schema, shell, fake-ADB, investigation and CLI tests passed before
+runtime validation. They cover observed zeros, independent missing inputs,
+decimal timing, a stat-read PID reuse race, disconnect and reboot, counter
+decrease, overlapping measurements, oversized intervals and arithmetic
+overflow. Fixtures exercise both 4 KiB and 16 KiB page units and CPU above
+100%. The full test suite, race suite and vet passed.
+
+On a fresh two-vCPU API 37 Google Play emulator with its ordinary ADB shell,
+the approved disposable app touched a 32 MiB direct buffer and ran one-worker
+and two-worker CPU phases. All 34 recorder samples matched the identity and
+units in 19 independent ADB reads, with 100 Hz ticks and 4096-byte pages.
+All 31 recorder samples with independent reads on both sides had cumulative
+CPU counters between their two references. The sampler and reference used
+different sampling intervals, so their individual percentages are not
+pointwise error estimates. The emulator was contended and the two-worker
+phase did not reach 100% of one core. Above-100% computation was verified
+with fixtures.
+
+Recorder RSS rose from 146.93 MiB just before the allocation to 179.09 MiB
+immediately afterward. Both the recorder and independent reference reached
+179.86 MiB. Observed stat timing brackets were 10–20 ms, including reported
+uptime precision. The provisional 250 ms limit is retained. Its margin on
+a physical device remains unmeasured.
+
+The controlled force-stop produced an observed absence with cause unknown.
+Its offline detail exposed CPU and RSS at last presence and included the
+two CPU source sequences. All 64 schema-3 records replayed exactly with no
+ADB on PATH. Repeated detail JSON was byte-identical, the DB hash stayed
+unchanged, and the accepted baseline binary rejected schema 3. Physical
+validation remains open because no phone was attached.
+
+For backward-compatibility verification, the new reader and `03d3d37` produced
+identical replay JSON, timeline indexes and selected details across six
+retained schema-2 emulator recordings. Database hashes matched before and
+after. Schema-1 coverage uses the existing offline fixtures.
+
+### Overhead compared with `03d3d37`
+
+The reference and candidate were built from `03d3d37` and the source in
+`d47fc2a`. Eight alternating command pairs executed the actual generated
+snapshot scripts via Android `/system/bin/time -v`. Median paired additional
+device user + system CPU was **0.054 ms per snapshot**, with deltas from
+−4.657 to +7.894 ms. The provisional 15 ms device CPU target passed on
+this emulator. Median command output was 10,962 versus 10,998 bytes.
+Shell accounting covers the timed command and its measured work. It does
+not quantify battery or thermal cost, and emulator conditions cannot
+establish physical-device overhead.
+
+The final live comparison used four uninstrumented 60-second watch windows
+in baseline/candidate/candidate/baseline order on the same emulator. The
+disposable app was idle and diagnostic collectors were enabled in all four
+windows. Each window yielded 58 successful snapshots. Timing, CPU, guest
+busy percentage and row size below use the median of the two windows for
+each mode. RSS is the maximum across both windows, sampled every 100 ms
+over the host capture and its child processes. Host CPU includes waited
+ADB clients. The shared ADB server is outside both host measurements.
+
+| Metric | Baseline | Resources enabled | Delta |
+| --- | ---: | ---: | ---: |
+| Median snapshot interval | 1046.07 ms | 1044.49 ms | −1.58 ms |
+| p95 snapshot interval | 1057.40 ms | 1050.97 ms | −6.42 ms |
+| Host CPU, percent of one core | 0.989% | 0.950% | −0.039 percentage points |
+| Peak sampled host process-tree RSS | 29,960 KiB | 31,236 KiB | +1,276 KiB |
+| Median snapshot JSON | 462 bytes | 779 bytes | +317 bytes |
+| Final SQLite database | 53,248 bytes | 73,728 bytes | +20,480 bytes |
+| Aggregate guest busy CPU | 4.96% | 5.98% | +1.02 percentage points |
+
+The provisional p95, host CPU, RSS and encoded-row growth targets passed.
+Differences within measurement variation are not claimed as speedups.
+The first comparison used a shim that logged generated scripts. Shimmed
+host measurements were excluded from the final comparison because the
+shim added host subprocess cost. Device command pairs measured the
+generated commands directly. Guest aggregate CPU includes background load
+and services and cannot isolate incremental device cost. The steady-state
+ADB call count is unchanged with known units, as exercised in the
+fake-ADB tests. Missing units may trigger the documented periodic retry.
+
+**Acceptance:** software correctness and provisional emulator overhead
+gates passed. The remaining hardware gate is fresh validation on an
+authorized physical phone, including device CPU overhead and the observed
+timing-bracket distribution. Test captures and raw measurements were kept
+under ignored `.validation/resources`.
