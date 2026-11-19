@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -25,10 +26,11 @@ func Run(ctx context.Context, input *os.File, output io.Writer, path string, id 
 	if err != nil {
 		return err
 	}
-	m := &model{ctx: ctx, load: recordingLoader(path, info), wanted: request{before: before, after: after}}
+	m := &model{ctx: ctx, load: recordingLoader(path, info), wanted: request{before: before, after: after}, initialBefore: before, initialAfter: after}
 	if id != nil {
 		m.screen, m.wanted.id = detailScreen, id.String()
 	}
+	m.window = initialWindow(m.wanted)
 	p := tea.NewProgram(m, tea.WithContext(ctx), tea.WithInput(input), tea.WithOutput(out), tea.WithAltScreen(), tea.WithoutSignalHandler())
 	_, err = p.Run()
 	m.discard()
@@ -50,7 +52,8 @@ func escape(s string) string {
 	var b strings.Builder
 	for _, r := range s {
 		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) || r == '\u2028' || r == '\u2029' {
-			b.WriteString(quoteRune(r))
+			q := strconv.QuoteRuneToASCII(r)
+			b.WriteString(q[1 : len(q)-1])
 		} else {
 			b.WriteRune(r)
 		}

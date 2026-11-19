@@ -14,13 +14,15 @@ import (
 
 type request struct {
 	id            string
+	ref           investigate.Reference
 	before, after time.Duration
 }
 
 type result struct {
-	job    *job
-	report investigate.TimelineReport
-	err    error
+	job      *job
+	report   investigate.TimelineReport
+	evidence *investigate.EvidenceSlice
+	err      error
 }
 
 type job struct {
@@ -80,6 +82,13 @@ func recordingLoader(path string, original os.FileInfo) func(context.Context, re
 		}
 		if err := check(); err != nil {
 			return result{err: err}
+		}
+		if req.ref.Sequence != 0 {
+			slice, err := investigate.ReadEvidence(ctx, path, req.ref)
+			if changed := check(); changed != nil {
+				return result{err: changed}
+			}
+			return result{evidence: &slice, err: err}
 		}
 		var id *investigate.IncidentID
 		if req.id != "" {
