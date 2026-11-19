@@ -50,11 +50,12 @@ func run(ctx context.Context, args []string, out, diagnostic io.Writer) error {
 		path := flags.String("out", "", "new recording file (default: XDG state directory)")
 		duration := flags.Duration("duration", 0, "stop after this duration (default: until interrupted)")
 		resources := flags.Bool("resources", false, "record main-process CPU counters and RSS (schema 3)")
+		summary := flags.Bool("summary", false, "show incident anchors after finalizing the recording")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
 		if flags.NArg() != 1 || !capture.ValidPackage(flags.Arg(0)) || *user < -1 || *duration < 0 {
-			return errors.New("usage: droidsleuth watch [--device SERIAL] [--user ID] [--out FILE] [--duration 10s] [--resources] PACKAGE; flags precede PACKAGE")
+			return errors.New("usage: droidsleuth watch [--device SERIAL] [--user ID] [--out FILE] [--duration 10s] [--resources] [--summary] PACKAGE; flags precede PACKAGE")
 		}
 		devices, err := client.Devices(ctx)
 		if err != nil {
@@ -87,15 +88,33 @@ func run(ctx context.Context, args []string, out, diagnostic io.Writer) error {
 				return err
 			}
 		}
-		if _, err := fmt.Fprintf(diagnostic, "Recording main process %s on %s to %s\n", meta.Package, meta.Serial, *path); err != nil {
+		options := capture.Options{Path: *path, Evidence: true, Resources: *resources, Visit: func(r session.Record) error { return printRecord(out, r) }}
+		if *summary {
+			abs, err := filepath.Abs(*path)
+			if err != nil {
+				return err
+			}
+			options.Path = abs
+			options.Visit = announceCaptureReady(diagnostic)
+			if _, err := fmt.Fprintf(diagnostic, "Starting capture for %q on %q to %q\n", meta.Package, meta.Serial, abs); err != nil {
+				return err
+			}
+		} else if _, err := fmt.Fprintf(diagnostic, "Recording main process %s on %s to %s\n", meta.Package, meta.Serial, *path); err != nil {
 			return err
 		}
+		captureCtx := ctx
 		if *duration > 0 {
 			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, *duration)
+			captureCtx, cancel = context.WithTimeout(ctx, *duration)
 			defer cancel()
 		}
-		return capture.Run(ctx, client, meta, capture.Options{Path: *path, Evidence: true, Resources: *resources, Visit: func(r session.Record) error { return printRecord(out, r) }})
+		if err := capture.Run(captureCtx, client, meta, options); err != nil || !*summary {
+			return err
+		}
+		if err := printWatchSummary(ctx, out, options.Path, watchSummaryTimeout); err != nil {
+			return fmt.Errorf("recording finalized at %q; summary failed: %w", options.Path, err)
+		}
+		return nil
 	case "investigate":
 		return runInvestigate(ctx, flags, args[1:], out, diagnostic)
 	case "replay":
