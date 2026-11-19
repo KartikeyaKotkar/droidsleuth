@@ -7,15 +7,18 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 
 	"droidsleuth/internal/investigate"
 	"droidsleuth/internal/session"
+	"droidsleuth/internal/tui"
 )
 
 func runInvestigate(ctx context.Context, flags *flag.FlagSet, args []string, out, diagnostic io.Writer) error {
 	asJSON := flags.Bool("json", false, "emit versioned investigation JSON")
 	last := flags.Bool("last", false, "use the newest finalized managed recording")
+	interactive := flags.Bool("tui", false, "open an interactive incident timeline in a terminal")
 	timeline := flags.Bool("timeline", false, "list incident anchors in a finalized recording")
 	incident := flags.String("incident", "", "inspect a timeline anchor by ID")
 	before := flags.Duration("before", investigate.DefaultContext, "context before the anchor (0..5m)")
@@ -24,7 +27,13 @@ func runInvestigate(ctx context.Context, flags *flag.FlagSet, args []string, out
 		return err
 	}
 	if (*last && flags.NArg() != 0) || (!*last && flags.NArg() != 1) {
-		return errors.New("usage: droidsleuth investigate [--json] [--timeline [--incident ID [--before D --after D]]] (FILE | --last)")
+		return errors.New("usage: droidsleuth investigate [--json] [--timeline | --tui] [--incident ID [--before D --after D]] (FILE | --last)")
+	}
+	if *interactive && *asJSON {
+		return errors.New("--tui cannot be combined with --json")
+	}
+	if *interactive {
+		*timeline = true
 	}
 	var incidentSet, contextSet bool
 	flags.Visit(func(f *flag.Flag) {
@@ -77,6 +86,9 @@ func runInvestigate(ctx context.Context, flags *flag.FlagSet, args []string, out
 				return err
 			}
 		}
+	}
+	if *interactive {
+		return tui.Run(ctx, os.Stdin, out, path, id, *before, *after)
 	}
 	if *timeline {
 		report, err := investigate.Timeline(ctx, path, id, *before, *after)

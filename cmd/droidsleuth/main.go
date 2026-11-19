@@ -29,7 +29,7 @@ func main() {
 
 func run(ctx context.Context, args []string, out, diagnostic io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: droidsleuth devices | watch [flags] PACKAGE | replay [--json] FILE | investigate [--json] [--timeline] (FILE | --last)")
+		return errors.New("usage: droidsleuth devices | watch [flags] PACKAGE | replay [--json] FILE | investigate [--json] [--timeline | --tui] (FILE | --last)")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(diagnostic)
