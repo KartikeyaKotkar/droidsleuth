@@ -28,6 +28,42 @@ current device user. Without `--out`, recordings go under
 `$XDG_STATE_HOME/droidsleuth` (default `~/.local/state/droidsleuth`). Existing files
 are never overwritten. Without `--duration`, Ctrl+C or SIGTERM stops capture.
 
+## Reproduce and investigate an incident
+
+1. Build with `go build -o droidsleuth ./cmd/droidsleuth`. Run
+   `./droidsleuth devices` and confirm the intended Android device shows
+   `device` status. Use `--device SERIAL` if more than one device is attached.
+2. Start a recording before reproducing the problem.
+
+   ```sh
+   ./droidsleuth watch --summary --resources --out repro.db com.example.app
+   ```
+
+3. Wait for **Capture ready**, then reproduce the problem. Readiness means a
+   successful process snapshot was committed. The selected app can be absent
+   from that snapshot. Press Ctrl+C to finalize, or set a `--duration` in advance.
+4. Review the finalized path and up to five newest indexed anchors on stdout.
+   Copy the printed TUI or text command for that exact file. Replace its
+   `--incident` ID to inspect another listed anchor. If the binary is outside
+   PATH, use its original path in place of `droidsleuth`.
+
+   ```sh
+   # Example incident ID. Use the ID and absolute path from your summary.
+   ./droidsleuth investigate --tui --incident E42.0 /path/to/repro.db
+   ./droidsleuth investigate --timeline --incident E42.0 /path/to/repro.db
+   ```
+
+The summary suppresses per-record stdout during capture. Report anchors are
+source claims with unproven instance association. Disappearance anchors retain
+an unknown cause. An empty index means no incident anchors were recorded.
+Use the printed replay command to check stored observations and coverage, and
+review any index-cap notice. TUI and text investigation work with ADB absent.
+
+If summary generation fails after finalization, the error identifies the saved
+file. Use explicit-file investigation to retry. Printed commands use POSIX
+shell quoting for ordinary paths and Bash or Zsh quoting for paths containing
+control characters or invalid UTF-8.
+
 ## Investigate offline
 
 ```sh

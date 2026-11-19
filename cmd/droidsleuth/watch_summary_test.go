@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -261,4 +264,179 @@ func recordJSON(t *testing.T, r session.Record) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+func TestWatchSummaryOffline(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	for _, schema := range []int{1, 2, 3} {
+		t.Run(fmt.Sprint(schema), func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "recording with 'quotes'.db")
+			process := session.Process{Identity: session.Identity{BootID: "boot", UID: 10123, PID: 7, StartTicks: 100}, Name: "com.example.app"}
+			replacement := process
+			replacement.StartTicks = 200
+			snapshot := func(p session.Process) *session.Snapshot {
+				return &session.Snapshot{BootID: p.BootID, Processes: []session.Process{p}}
+			}
+			rows := []session.Record{
+				{Kind: "snapshot", Snapshot: snapshot(process), Transitions: []session.Transition{{Kind: "appeared", Process: process}}},
+				{Kind: "gap", Error: "snapshot disconnected"},
+				{Kind: "snapshot", Snapshot: snapshot(replacement), Transitions: []session.Transition{
+					{Kind: "no_longer_observed", Process: process, AfterGap: true}, {Kind: "appeared", Process: replacement, AfterGap: true},
+				}},
+			}
+			if schema != 1 {
+				rows = append(rows, session.Record{Kind: "gap", Source: "logcat", Error: "buffer overlap missing"},
+					watchReport(10), watchReport(10), watchReport(1))
+			}
+			writeSummaryFixture(t, path, schema, rows)
+			before := watchHash(t, path)
+			var first, second bytes.Buffer
+			if err := printWatchSummary(ctx, &first, path, time.Second); err != nil {
+				t.Fatal(err)
+			}
+			if err := printWatchSummary(ctx, &second, path, time.Second); err != nil || first.String() != second.String() {
+				t.Fatalf("nondeterministic summary: %v", err)
+			}
+			summary := first.String()
+			if !strings.Contains(summary, fmt.Sprintf("schema %d, status complete", schema)) {
+				t.Fatal(summary)
+			}
+			ids := []string{"L3.0"}
+			if schema != 1 {
+				ids = []string{"E7.0", "E5.0", "L3.0"}
+				if strings.Contains(summary, "E6.0") {
+					t.Fatal("duplicate report appeared in summary")
+				}
+			}
+			last := -1
+			for _, id := range ids {
+				pos := strings.Index(summary, "  "+id+" [")
+				if pos <= last {
+					t.Fatalf("wrong recording order for %q in %q", id, summary)
+				}
+				last = pos
+				var detail bytes.Buffer
+				if err := run(ctx, []string{"investigate", "--timeline", "--incident", id, path}, &detail, io.Discard); err != nil {
+					t.Fatalf("summary ID failed to resolve: %v", err)
+				}
+				if strings.HasPrefix(id, "L") && !strings.Contains(detail.String(), "after_gap=true. Disappearance cause unknown") {
+					t.Fatalf("lifecycle uncertainty lost: %q", detail.String())
+				}
+			}
+			if !strings.Contains(summary, "investigate --tui --incident "+ids[0]+" "+shellRecordingPath(path)) || watchHash(t, path) != before {
+				t.Fatalf("handoff did not use the original recording unchanged: %q", summary)
+			}
+			if err := printWatchSummary(ctx, io.Discard, path, 0); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expired summary deadline ignored: %v", err)
+			}
+			watchExecSQL(t, path, "UPDATE observations SET payload='{' WHERE sequence=1")
+			broken := watchHash(t, path)
+			first.Reset()
+			if err := printWatchSummary(ctx, &first, path, time.Second); err == nil || first.Len() != 0 || watchHash(t, path) != broken {
+				t.Fatalf("malformed recording yielded output or changed: %q, %v", first.String(), err)
+			}
+		})
+	}
+}
+
+func TestWatchSummaryEmptyAndCappedIndexes(t *testing.T) {
+	for _, count := range []int{0, 4098} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "index.db")
+			rows := make([]session.Record, count)
+			for i := range rows {
+				rows[i] = watchReport(int64(i + 1))
+			}
+			writeSummaryFixture(t, path, 2, rows)
+			var out bytes.Buffer
+			if err := printWatchSummary(context.Background(), &out, path, watchSummaryTimeout); err != nil {
+				t.Fatal(err)
+			}
+			s := out.String()
+			if count == 0 {
+				if !strings.Contains(s, "No incident anchors recorded.") || !strings.Contains(s, "droidsleuth replay "+shellRecordingPath(path)) || strings.Contains(s, "--incident") {
+					t.Fatal(s)
+				}
+			} else {
+				if !strings.Contains(s, "Later anchors may be omitted.") || strings.Count(s, "instance association unproven") != 5 || strings.Contains(s, "E4097") {
+					t.Fatal(s)
+				}
+				for i := 4096; i > 4091; i-- {
+					id := fmt.Sprintf("E%d.0", i)
+					if !strings.Contains(s, "  "+id+" [") {
+						t.Fatalf("missing %s: %s", id, s)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestWatchSummaryCommandPathQuoting(t *testing.T) {
+	for _, path := range []string{
+		"/tmp/ordinary path with a 'quote' and `echo unsafe`.db",
+		"/tmp/x\x1b]52;unsafe\a\n\t\xff\u202e'\\.db",
+	} {
+		arg := shellRecordingPath(path)
+		if strings.ContainsAny(arg, "\x1b\a\n\t\u202e") {
+			t.Fatalf("unescaped controls in %q", arg)
+		}
+		// The rendered argument must survive copy/paste verbatim.
+		got, err := exec.Command("/bin/bash", "-c", "printf '%s' "+arg).Output()
+		if err != nil || string(got) != path {
+			t.Fatalf("shell changed path bytes: %q, %v", got, err)
+		}
+	}
+}
+
+func watchReport(deviceNS int64) session.Record {
+	return session.Record{Kind: "evidence", Source: "logcat", Evidence: &session.Evidence{
+		Format: "fixture", Text: "reported ANR", Events: []session.Event{{
+			Kind: "anr_report", PID: 7, Process: "com.example.app", FirstLine: 1, LastLine: 1, DeviceTimeNS: deviceNS,
+		}},
+	}}
+}
+
+func writeSummaryFixture(t *testing.T, path string, schema int, rows []session.Record) {
+	t.Helper()
+	ctx := context.Background()
+	s, err := session.Create(ctx, path, session.Metadata{Package: "com.example.app", Schema: max(schema, 2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for i, r := range rows {
+		r.Sequence = int64(i + 1)
+		r.StartElapsedNS = r.Sequence * int64(time.Second)
+		r.EndElapsedNS = r.StartElapsedNS + int64(time.Millisecond)
+		if schema == 3 && r.Snapshot != nil {
+			id := r.Snapshot.Processes[0].Identity
+			sample := &session.Resources{Status: session.ResourceSingle, Identity: &id}
+			sample.CPUUnavailable = sample.CPUInputIssue()
+			sample.RSSUnavailable = sample.RSSInputIssue()
+			r.Resources = sample
+		}
+		if err := s.Append(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Finish(ctx, "complete"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if schema == 1 {
+		watchExecSQL(t, path, `PRAGMA user_version=1; UPDATE metadata SET payload=replace(payload,'"schema":2','"schema":1')`)
+	}
+}
+
+func watchHash(t *testing.T, path string) [sha256.Size]byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sha256.Sum256(data)
 }
