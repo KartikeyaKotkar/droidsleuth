@@ -1525,3 +1525,104 @@ their omission and truncation indicators and points to CLI replay for stored
 observations. Live recording, search, dashboards and hot-journal recovery
 remain outside this milestone. The underlying diagnostic coverage and Android
 compatibility limits described above still apply.
+
+## v0.1 capture-to-investigation handoff
+
+`watch --summary` uses the existing post-commit callback to announce readiness
+on stderr once, following the first successful snapshot. In this mode stdout is
+reserved for the incident summary. The capture can be ready while the selected
+process is absent. Duration expiry and an interrupt both finalize through the
+existing writer path. The summary begins only after capture and finalization
+succeed. Plain `watch` keeps its per-record presentation.
+
+The handoff scans the exact absolute recording path through the finalized
+`investigate.Timeline` index with a fresh 10-second analysis deadline. It
+prints the package, schema, finalized status, and at most five anchors in
+reverse index order, with host collection bounds. A capped index warns that
+later anchors can be omitted. An empty index describes the stored result and
+points to replay for coverage. A disappearance has an unknown cause and a
+diagnostic report has unproven instance association. The printed TUI, text,
+and replay commands quote the exact recording path, including embedded
+single quotes. Paths with terminal controls or invalid UTF-8 use byte escapes
+in Bash or Zsh command syntax.
+
+Capture or finalization errors skip the summary. Errors after finalization
+identify the saved path and return nonzero so the user can retry with
+`investigate FILE`. The handoff uses the existing read-only SQLite
+transaction, index limit, and schema readers. Capture keeps its existing
+ADB calls, collectors, identity tracker, gap semantics, and recording
+formats. `--last` remains available for separate investigation commands.
+
+### Verification and rehearsal
+
+- Fake-ADB tests covered duration completion, interrupted capture, readiness
+  after a failed poll followed by a committed empty snapshot, exclusive
+  output creation, injected metadata finalization failure, and summary
+  output failure. The paired timed captures issued the same counts by ADB
+  operation and retained the same observations per source after removing
+  run-specific timing and sequence envelopes.
+- Finalized fixtures covered schemas 1–3, empty and capped indexes, delayed
+  and duplicate reports, PID reuse across a snapshot gap, diagnostic gaps,
+  unavailable resources, malformed rows, and an expired analysis deadline.
+  Printed IDs resolved through existing incident details. Copies of summary
+  commands round-tripped paths with spaces, quotes, control characters, and
+  invalid UTF-8 through the shell. Repeated summary output matched and the
+  recordings kept their SHA-256 hashes.
+- With ADB absent, replay, investigation, timeline text and JSON, and selected
+  incident details matched commit `e5f572c` byte for byte on a retained
+  emulator diagnostic recording, retained emulator and historical physical
+  CPU/RSS recordings, and the new rehearsal recording. Hashes stayed unchanged.
+  A retained Java fatal recording also passed the Linux TUI PTY smoke test.
+- `go test ./...`, `go test -race ./...`, `go vet ./...`, and
+  `go mod verify` passed with Go 1.23.12.
+
+A clean checkout of `4f32ff6` built with Go 1.23.12 and ran the quickstart
+workflow on a disposable API 37 Google Play x86-64 emulator with ordinary shell
+UID 2000 and KVM. The approved app package was verified absent before install.
+The timed idle run produced a finalized schema-2 empty index. An unavailable
+serial produced a startup error and created no database. For the schema-3 run,
+the fixture triggered a controlled Java exception, relaunched as a different
+process, and was force-stopped. SIGINT finalized the recording as interrupted.
+
+The summary showed exit-history anchor `E24.0` for Android reason 4
+(`APP CRASH(EXCEPTION)`) and separate disappearance anchor `L25.0` for the
+force-stopped instance. The crash association remained unproven. The
+disappearance cause remained unknown. Both anchors opened in text and the TUI
+with ADB absent and the recording hash unchanged. The printed text and replay
+commands executed against the quoted path as displayed.
+
+Independent ADB inspection showed the fixture's Java fatal stack in the
+emulator crash buffer. The recording's bounded logcat polls retained zero
+reports in this run. The cause of that source miss was unverified. The
+handoff presented the recorded exit-history evidence. This is an emulator
+result, with previous physical evidence used only for offline compatibility.
+The fixture was uninstalled, the AVD was removed, and no physical-device
+workload ran.
+
+### Performance and acceptance
+
+Five paired warm-cache runs per input alternated standalone timeline JSON and
+summary. A temporary Go 1.23.12 harness exercised both production paths
+against pre-finalized SQLite inputs with output directed to a sink. Timing
+starts immediately before the offline operation and excludes capture and
+process startup. Linux `VmHWM` was sampled about every 2 ms. Short peaks
+near process exit can escape sampling. This isolates the handoff and does
+not measure the memory retained by a prior live capture in the same process.
+The host was Linux x86-64 with an AMD Ryzen 7 4800H.
+
+| Input | Standalone timeline latency range | Summary latency range | Standalone peak RSS | Summary peak RSS | RSS delta |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 10,000 rows, 4,370,432 bytes | 0.097–0.108 s | 0.096–0.111 s | 22,740 KiB | 22,792 KiB | +52 KiB |
+| 14,262 rows, 268,414,976 bytes | 2.020–2.135 s | 2.014–2.252 s | 23,360 KiB | 23,240 KiB | −120 KiB |
+
+The representative input extends a retained API 37 emulator recording with
+source status rows. The near-limit input adds synthetic 60 KiB diagnostic gaps
+until the 256 MiB SQLite page cap rejects another insert. All runs passed the
+2-second representative, 10-second near-limit, and 16 MiB incremental RSS
+targets. The fixture comparison observed zero added ADB calls. Benchmarks and
+rehearsal artifacts are in ignored `.validation/handoff`.
+
+The handoff scans the finalized file once, so a slow or damaged recording may
+require explicit-file retry. The summary's five entries come from the bounded
+index, and retained reports can be delayed or absent. Repository-wide
+compatibility and diagnostic source limitations above still apply.
