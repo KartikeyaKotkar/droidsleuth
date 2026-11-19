@@ -1058,3 +1058,99 @@ assertions are not retroactively repaired. Review their retained source evidence
 The gate supports the tested software/runtime scope. Broader physical/OEM and
 power validation remains open and requires an authorized real test phone plus
 review of exact mutation commands. Stop here; no Milestone 3 work was started.
+
+## Offline incident timelines
+
+This milestone implements the offline investigation slice of PLAN.md §3.B–D
+and the illustrative `investigate --last` workflow in §1. The dated
+compatibility gate above remains the record for diagnostic source validation.
+
+`investigate --timeline FILE` lists anchors in commit sequence. IDs encode the
+observation sequence and zero-based transition or event index. A lifecycle
+anchor identifies a recorded disappearance, and a report anchor identifies a
+normalized source claim. The index keeps the first occurrence of identical
+source reports, while direct lookup accepts any valid observation reference.
+
+`investigate --timeline --incident ID FILE` shows the selected observation
+and its context. It includes same-row transitions, so process replacement
+remains visible when appearance and disappearance share a snapshot. A
+lifecycle view shows the last recorded presence, first observed absence and
+snapshot gap count between them when both endpoints are available. It carries
+the recorded `after_gap` flag. Diagnostic gaps appear with their own source
+and do not contribute to the lifecycle gap count. Candidate associations use
+the existing investigation rules and remain unproven.
+
+Context is selected by intersection with the host elapsed collection window
+and presented in sequence order. The defaults are 30 seconds on each side,
+adjustable independently from zero to five minutes. Device occurrence
+timestamps, precision and raw time text remain separate. Retained excerpts
+point to one-based lines in the original observation. The index caps at
+4,096 anchors, and detail caps at 100 context observations on each side. Large
+context rows retain their source and sequence with an explicit omission
+marker. An 8 KiB per-row budget covers base context and a 1 MiB per-detail
+budget covers report enrichment. Selected excerpts cap at 2 KiB. Truncation
+and incomplete association analysis are explicit.
+
+Timeline analysis uses a single read-only SQLite transaction for finalized
+schema-1 and schema-2 recordings. This keeps metadata, observation lookup and
+scans in the same database snapshot. A file identity, size or modification-time
+change detected across the read causes an error. Legacy explicit-file output,
+including investigation JSON version 1, remains byte-compatible. Timeline JSON
+uses `report_type: "incident_timeline"` and its own version 1. No storage
+migration is needed. The capture transport, snapshot tracker, evidence sources
+and writer remain unchanged.
+
+`--last` selects the newest finalized managed recording by its timestamped
+filename, within a 4,096-entry directory bound. It skips and reports newer
+recordings whose metadata is still unfinalized, surfaces unreadable or invalid
+candidates, and ignores symlink entries. Explicit filenames can point to
+custom output paths. Complete, interrupted and failed finalized sessions are
+eligible. The previous binary remains a rollback option without data changes.
+
+### Verification and measurements
+
+`go test ./...`, `go test -race ./...` and `go vet ./...` passed. Regression
+coverage includes exact legacy text and JSON, schema-1 and schema-2 reading,
+discovery and its errors, replaced files, malformed IDs, terminal quoting,
+cancellation, output errors, duplicate and conflicting reports, delayed and
+unknown timestamps, same-PID replacement, same-row transitions, boot changes,
+window intersections and explicit resource limits.
+
+Offline checks used six retained Android emulator recordings from API 30, 33,
+35, 36 and 37. Each index contained recorded disappearance, Java fatal, native
+crash and ANR anchors. The 24 selected details and six indexes produced
+byte-identical repeated JSON with no ADB on PATH. SHA-256 hashes of the
+recordings remained unchanged. Those runs reuse emulator artifacts. An ADB
+availability check found no connected phone, so fresh physical validation is
+pending.
+
+Benchmarks used the same Linux reference host as the compatibility gate. The
+10,000-row input extends the 9,877-row API 37 recording with ordinary source
+status rows. The stress input fills the same database with 60 KiB source gaps
+until SQLite rejects another row under the 256 MiB page cap. Output JSON was
+encoded to a sink. The first run used a page-cache eviction hint for the
+database and is not a verified cold boot. The second run used the warm cache.
+RSS is sampled Linux process high-water RSS from `/proc`, with possible
+undersampling immediately before exit.
+
+| Dataset | Investigation mode | Eviction-hint and warm wall times | Largest sampled RSS |
+| --- | --- | --- | ---: |
+| 10,000 rows, 4,370,432 bytes | Legacy | 0.148 s / 0.142 s | 24,072 KiB |
+| 10,000 rows | Timeline index | 0.074 s / 0.078 s | 23,900 KiB |
+| 10,000 rows | Timeline detail | 0.198 s / 0.203 s | 22,540 KiB |
+| 14,262 rows, 268,414,976 bytes | Legacy | 1.887 s / 1.902 s | 25,140 KiB |
+| Near storage limit | Timeline index | 0.931 s / 0.919 s | 24,428 KiB |
+| Near storage limit | Timeline detail | 2.841 s / 2.840 s | 25,180 KiB |
+
+The tested inputs met the two- and 30-second gates, respectively. Peak sampled
+detail RSS on the large input was about 40 KiB above the highest legacy sample
+and within the 32 MiB incremental budget. This sample is a comparative host
+measurement, with no new device polling cost to measure. The index uses one
+streaming pass. Detail uses one indexed lookup and one context pass, with up
+to two more passes for evidence enrichment.
+
+OEM diagnostic formats, silent cross-buffer loss, physical-device PID
+replacement during disconnect, battery and thermal behavior, custom/isolated
+processes and automatic hot-journal recovery remain open. Timeline analysis
+depends only on the observations already recorded. Historical assertions
+retain their original source evidence and uncertainty.

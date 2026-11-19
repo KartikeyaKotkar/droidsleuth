@@ -187,3 +187,27 @@ func TestTimelineUnfinalizedAndInvalidAnchor(t *testing.T) {
 		t.Fatal("canceled read succeeded")
 	}
 }
+
+func TestTimelineWindowAndMultipleEvents(t *testing.T) {
+	f := newTimelineFixture(t)
+	unknown := session.Event{Kind: "exit_report", Process: "com.example.app", PID: 5, RawTime: "ambiguous wall time", FirstLine: 1, LastLine: 1}
+	second := unknown
+	second.FirstLine, second.LastLine = 2, 2
+	second.PID = 9
+	f.append(session.Record{Kind: "gap", Source: "logcat", Error: "outside window"})
+	f.append(session.Record{Kind: "gap", Source: "logcat", StartElapsedNS: 2_000_000_000, EndElapsedNS: 3_000_000_000, Error: "intersects point"})
+	f.append(session.Record{Kind: "evidence", Source: "exit_history", Evidence: &session.Evidence{Format: "fixture", Text: "first\nsecond", Events: []session.Event{unknown, second}}})
+	f.append(session.Record{Kind: "gap", Error: strings.Repeat("x", 9<<10)})
+	f.finish()
+	index := f.timeline("", 0, 0)
+	if len(*index.Incidents) != 2 || (*index.Incidents)[1].ID != "E3.1" {
+		t.Fatal("lost sibling incident ID")
+	}
+	d := f.timeline("E3.1", 0, time.Second).Incident
+	if len(d.Context) != 2 || d.Context[0].Sequence != 2 || d.Context[1].Sequence != 4 || !d.Context[1].DetailsOmitted {
+		t.Fatalf("bad overlap/cap semantics: %+v", d.Context)
+	}
+	if len(d.AnchorObservation.Reports) != 2 || d.Report.Excerpt != "second" || d.Report.Reference.FirstLine != 2 || d.Report.Event.RawTime != "ambiguous wall time" || d.Report.Association != "unbound" {
+		t.Fatalf("lost selected report context: %+v", d.Report)
+	}
+}

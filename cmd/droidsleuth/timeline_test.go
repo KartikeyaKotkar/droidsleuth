@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -67,6 +68,18 @@ func TestInvestigateTimelineCLI(t *testing.T) {
 	if out.String() != legacy+"\n" {
 		t.Fatalf("legacy JSON changed: %s", out.String())
 	}
+	if err := call(path); err != nil {
+		t.Fatal(err)
+	}
+	const legacyText = "Package \"com.example.app\"; 0 reported events; 1 observed disappearances (cause unknown)\n" +
+		"#2 [0.000..0.000s] coverage gap (logcat): \"source failed\\x1b[2J\"\n" +
+		"Limitation: Reports describe source claims, not proven causes of observed disappearance.\n" +
+		"Limitation: Logcat is a finite filtered tail; silent buffer loss and incidents before collection may be unobservable.\n" +
+		"Limitation: Source realtime timestamps are distinct from host collection bounds; clock changes and delayed records may prevent instance association.\n"
+	if out.String() != legacyText {
+		t.Fatalf("legacy text changed: %q", out.String())
+	}
+
 	if err := call("--last", "--json"); err != nil {
 		t.Fatal(err)
 	}
@@ -77,13 +90,14 @@ func TestInvestigateTimelineCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	var r struct {
-		ReportType, View, Recording string
-		Incidents                   []struct{ ID string }
+		ReportType      string `json:"report_type"`
+		View, Recording string
+		Incidents       []struct{ ID string }
 	}
 	if err := json.Unmarshal(out.Bytes(), &r); err != nil {
 		t.Fatal(err)
 	}
-	if r.View != "index" || r.Recording != path || len(r.Incidents) != 1 || r.Incidents[0].ID != "L3.0" {
+	if r.ReportType != "incident_timeline" || r.View != "index" || r.Recording != path || len(r.Incidents) != 1 || r.Incidents[0].ID != "L3.0" {
 		t.Fatalf("index: %s", out.String())
 	}
 	if err := call("--timeline", "--incident", "L3.0", path); err != nil {
@@ -119,3 +133,47 @@ func TestInvestigateTimelineCLI(t *testing.T) {
 type failedWriter struct{}
 
 func (failedWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestTimelineSchemaOneWithoutADB(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "schema1.db")
+	s, err := session.Create(ctx, path, session.Metadata{Package: "com.example.app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := session.Process{Identity: session.Identity{BootID: "old", UID: 10123, PID: 12, StartTicks: 3}, Name: "com.example.app"}
+	for _, r := range []session.Record{
+		{Sequence: 1, Kind: "snapshot", Snapshot: &session.Snapshot{BootID: "old", Processes: []session.Process{p}}},
+		{Sequence: 2, Kind: "snapshot", Snapshot: &session.Snapshot{BootID: "old"}, Transitions: []session.Transition{{Kind: "no_longer_observed", Process: p}}},
+	} {
+		if err := s.Append(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Finish(ctx, "complete"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`PRAGMA user_version=1; UPDATE metadata SET payload=replace(payload,'"schema":2','"schema":1')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := run(ctx, []string{"investigate", "--timeline", "--incident", "L2.0", path}, &out, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"schema 1", "Last observed presence #1", "First observed absence #2", "Schema 1 contains no diagnostic collectors"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q from %s", want, out.String())
+		}
+	}
+}
