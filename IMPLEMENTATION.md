@@ -1285,3 +1285,115 @@ gates passed. The remaining hardware gate is fresh validation on an
 authorized physical phone, including device CPU overhead and the observed
 timing-bracket distribution. Test captures and raw measurements were kept
 under ignored `.validation/resources`.
+
+### Physical CPU/RSS acceptance
+
+The authorized USB phone was a Motorola Android 17/API 37 build with ordinary
+ADB shell UID 2000 and Android user 0. The validation package was absent at
+preflight. The approved local APK requested no permissions and was installed
+without replacement. The only application exercised was the disposable
+fixture. The resource action touched a 32 MiB buffer and ran one and then two
+CPU workers for 12 seconds each.
+
+Independent ADB reads checked the target UID, PID, start ticks, boot ID,
+device uptime, CPU counters, RSS pages and conversion units. The 36 recorder
+samples from the workload identity matched the identity and units in 22
+reference reads. All 35 samples with a reference on both sides fell within the
+reference cumulative CPU counter bounds. The phone reported 100 ticks per
+second and 4096 bytes per page.
+
+| Workload | Recorder median CPU, % of one logical CPU | Independent median |
+| --- | ---: | ---: |
+| One CPU worker | 99.2% | 98.9% |
+| Two CPU workers | 199.2% | 199.5% |
+
+The independent and recorder intervals differ, so these medians are a
+workload cross-check rather than pointwise error estimates. RSS moved from
+140.96 MiB just before page touch to 172.91 MiB afterward. Both readers saw a
+peak of 176.64 MiB. RSS remains an approximate resident footprint and can
+include shared pages. All workload timing brackets were 10 ms including
+reported uptime precision.
+
+Controlled force-stop produced observed absence with cause unknown. Relaunch
+produced a distinct process identity and a fresh CPU baseline. Across the
+two identities, the capture retained 49 resource samples. The only snapshot
+gap in this workload recording was the capture deadline interrupting the
+last poll. The workload's 89 schema-3 rows replayed exactly against their
+SQLite payloads with ADB absent. Repeated detail JSON matched byte for byte
+and the database hash stayed unchanged. The CPU endpoint references and
+derived rates were independently checked against the stored raw counters.
+
+The focused fixtures also exercised actual same-PID/different-start-tick
+rejection, a boot change with different units, and one resource metric
+remaining usable when the other fails. The physical workload did not force
+PID-number recycling or deliberately impair a kernel source.
+
+The restarted fixture's median idle CPU was 0% of one logical CPU across 12
+rate samples. In a separate capture, a host shim failed three snapshot calls
+between successful reads from the live phone. Recovery confirmed the same
+full identity and no lifecycle transition. RSS was available on the first
+recovered snapshot, CPU returned `baseline_required`, and subsequent valid
+samples resumed rates. The three errors were injected at the host transport
+boundary. Physical USB disconnection and a real boot change were outside the
+executed check. No reboot approval was received. Boot-change and same-PID
+replacement semantics remain verified by deterministic fixtures.
+
+#### Physical overhead against `03d3d37`
+
+Four uninstrumented 60-second windows ran in baseline, candidate, candidate,
+baseline order. The idle fixture and diagnostic collectors stayed active
+throughout. Baseline counts were 48 and 52 snapshots. Both candidate
+windows had 50. No snapshot gaps occurred in these windows. Cadence is
+snapshot start-to-start. Command latency is the host-observed elapsed time
+of a successful snapshot ADB shell call. Per-mode figures are medians of
+the two windows, except RSS, which is the maximum sampled process-tree RSS.
+Host CPU includes waited ADB clients. RSS includes sampled children of all
+host threads at 100 ms intervals and may miss short peaks. The shared ADB
+server is excluded from both host measurements.
+
+| Metric | Baseline | Resources enabled | Delta |
+| --- | ---: | ---: | ---: |
+| Median snapshot cadence | 1214.36 ms | 1181.49 ms | −32.87 ms |
+| p95 snapshot cadence | 1248.13 ms | 1306.51 ms | +58.38 ms |
+| p95 snapshot command wall latency | 236.75 ms | 298.95 ms | +62.19 ms |
+| Host CPU, percent of one logical CPU | 0.994% | 0.980% | −0.015 percentage points |
+| Peak sampled host process-tree RSS | 32,996 KiB | 33,076 KiB | +80 KiB |
+| Median encoded snapshot | 470 bytes | 799 bytes | +329 bytes |
+| Final SQLite database | 47,104 bytes | 69,632 bytes | +22,528 bytes |
+| Aggregate phone busy CPU | 6.71% | 9.95% | +3.25 percentage points |
+
+Twelve interleaved command pairs alternated candidate-first and baseline-first
+order. Android `/system/bin/time -v` measured user plus system CPU for the
+actual generated snapshot scripts. Median costs were 138.883 ms baseline
+and 140.250 ms candidate. The median of paired differences was **+1.747 ms**,
+with individual differences ranging from −8.745 to +18.485 ms. Median
+command stdout grew from 26,355 to 26,396.5 bytes. The 15 ms target applies
+to the median paired difference. One pair exceeded 15 ms. Aggregate phone
+busy CPU includes background load and ADB service work and is not an isolated
+overhead estimate. The baseline command wall p95 itself ranged from 181.53
+to 291.98 ms across its two windows. The measured wall p95 increase has no
+separate provisional target, and two windows per mode do not isolate the
+source of that difference.
+
+| Provisional target | Physical result | Decision |
+| --- | --- | --- |
+| Median paired device CPU ≤15 ms | +1.747 ms | Pass |
+| p95 cadence growth ≤max(10%, 20 ms) | +58.38 ms (4.68%), allowance 124.81 ms | Pass |
+| Added host CPU ≤0.5 percentage points | −0.015 percentage points | Pass |
+| Added peak sampled host RSS ≤8 MiB | +80 KiB | Pass |
+| Added encoded data ≤1 KiB per snapshot | +329 bytes | Pass |
+| Extra steady-state ADB calls with cached units | Zero. Instrumented workload saw one initial unit probe. | Pass |
+
+In the idle candidate windows, 98 timing brackets measured 10 ms and two
+measured 20 ms. No exercised bracket approached 250 ms. The cutoff and all
+provisional targets are unchanged. A new boot or a rate-limited retry after
+missing units can add a probe outside steady operation with cached units.
+This run does not quantify battery, thermal or other OEM behavior.
+
+**Acceptance:** the tested physical workload, independent input checks, process
+replacement, host-injected recovery, offline analysis and provisional
+performance targets passed. Physical boot change remains unverified for this
+gate. The disposable package was uninstalled and verified absent. No product
+code change was needed. `go test ./...`, `go test -race ./...` and
+`go vet ./...` passed. Raw artifacts are in ignored
+`.validation/resources-phone`.
