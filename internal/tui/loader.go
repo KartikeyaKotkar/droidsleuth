@@ -8,21 +8,24 @@ import (
 	"time"
 
 	"droidsleuth/internal/investigate"
+	"droidsleuth/internal/session"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 type request struct {
 	id            string
+	direct        bool
 	ref           investigate.Reference
 	before, after time.Duration
 }
 
 type result struct {
-	job      *job
-	report   investigate.TimelineReport
-	evidence *investigate.EvidenceSlice
-	err      error
+	job        *job
+	report     investigate.TimelineReport
+	evidence   *investigate.EvidenceSlice
+	err        error
+	unreadable bool
 }
 
 type job struct {
@@ -83,27 +86,37 @@ func recordingLoader(path string, original os.FileInfo) func(context.Context, re
 		if err := check(); err != nil {
 			return result{err: err}
 		}
-		if req.ref.Sequence != 0 {
-			slice, err := investigate.ReadEvidence(ctx, path, req.ref)
-			if changed := check(); changed != nil {
-				return result{err: changed}
-			}
-			return result{evidence: &slice, err: err}
+		loaded := loadRecording(ctx, path, req)
+		if err := check(); err != nil {
+			return result{err: err}
 		}
-		var id *investigate.IncidentID
-		if req.id != "" {
-			parsed, err := investigate.ParseIncidentID(req.id)
-			if err != nil {
-				return result{err: err}
-			}
-			id = &parsed
-		}
-		r, err := investigate.Timeline(ctx, path, id, req.before, req.after)
-		if changed := check(); changed != nil {
-			return result{err: changed}
-		}
-		return result{report: r, err: err}
+		return loaded
 	}
+}
+
+func loadRecording(ctx context.Context, path string, req request) result {
+	if req.ref.Sequence != 0 {
+		slice, err := investigate.ReadEvidence(ctx, path, req.ref)
+		return result{evidence: &slice, err: err}
+	}
+	var id *investigate.IncidentID
+	if req.id != "" {
+		parsed, err := investigate.ParseIncidentID(req.id)
+		if err != nil {
+			return result{err: err}
+		}
+		id = &parsed
+	}
+	r, err := investigate.Timeline(ctx, path, id, req.before, req.after)
+	if err != nil && req.direct && ctx.Err() == nil {
+		// Distinguish an unreadable recording from a failed anchor lookup.
+		// Valid direct loads still open a single SQLite transaction.
+		openErr := session.WithFinalizedRecording(ctx, path, func(session.Recording) error { return nil })
+		if openErr != nil {
+			return result{err: openErr, unreadable: true}
+		}
+	}
+	return result{report: r, err: err}
 }
 
 func openRecording(path string) (os.FileInfo, error) {

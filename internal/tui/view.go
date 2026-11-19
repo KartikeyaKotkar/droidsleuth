@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -19,6 +18,7 @@ var helpLines = []string{
 	"q or Ctrl+C quits.",
 	"Host collection and device occurrence use separate clocks.",
 	"Reports are source claims. Instance associations are unproven.",
+	"CPU uses one logical CPU as 100%.",
 	"Resources are context. Disappearance has unknown cause.",
 	"Logcat can lose records silently.",
 }
@@ -30,6 +30,9 @@ func (m *model) View() string {
 			notice = "q quit · resize"
 		}
 		return ansi.Truncate(notice, max(1, m.width), "")
+	}
+	if m.changed {
+		return "Recording changed. Quit and reopen.\nq Quit"
 	}
 	header := []string{"DroidSleuth · Incident investigation"}
 	var body []string
@@ -62,7 +65,7 @@ func (m *model) View() string {
 				body = append(body, marker(i == m.indexCursor.selected)+fmt.Sprintf("%s %s · PID %d · %s", e.ID, e.Kind, e.PID, name))
 			}
 		}
-		keys = "↑/↓ Move  Enter Open  g ID  ? Help  q Quit"
+		keys = "↑↓ Move  Enter Open  g ID  ? Help  q"
 	case m.screen == detailScreen:
 		header = append(header, "Timeline · "+m.wanted.id, fmt.Sprintf("Host window: %s before / %s after", m.wanted.before, m.wanted.after))
 		if d := m.detail.Incident; d != nil {
@@ -80,7 +83,7 @@ func (m *model) View() string {
 				body = append(body, marker(i == m.timelineCursor.selected)+anchor+observationLabel(row))
 			}
 		}
-		keys = "Enter Detail  e Evidence  w Window  Esc Index"
+		keys = "Enter Detail  e Evidence  w Window  Esc"
 	case m.screen == observationScreen:
 		header = append(header, fmt.Sprintf("Observation #%d · %s", m.selectedRow().Sequence, m.wanted.id))
 		body = m.inspectorPage()
@@ -102,12 +105,10 @@ func (m *model) View() string {
 			header = append(header, note)
 		}
 		body = m.inspectorPage()
-		keys = "↑/↓ Scroll  PgUp/PgDn Page  Esc Back"
+		keys = "↑↓ Scroll  PgUp/PgDn  Esc Back"
 	}
 	status := ""
 	switch {
-	case errors.Is(m.err, errChanged):
-		status = "Recording changed. Quit and reopen."
 	case m.err != nil:
 		status = m.err.Error()
 		if m.screen == evidenceScreen || (m.screen == detailScreen && m.detail.Incident == nil) {

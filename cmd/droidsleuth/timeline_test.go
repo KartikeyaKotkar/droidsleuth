@@ -177,3 +177,20 @@ func TestTimelineSchemaOneWithoutADB(t *testing.T) {
 		}
 	}
 }
+
+func TestInvestigateTUIFlags(t *testing.T) {
+	var out bytes.Buffer
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--tui", "--json", "recording.db"}, "--tui cannot be combined with --json"},
+		{[]string{"--tui", "--before", "5s", "recording.db"}, "--before and --after require --incident"},
+		{[]string{"--tui", "--incident", "L1.0", "--before", "5s", "recording.db"}, "--tui requires terminal input and output"},
+	} {
+		err := run(context.Background(), append([]string{"investigate"}, tc.args...), &out, io.Discard)
+		if err == nil || !strings.HasPrefix(err.Error(), tc.want) || out.Len() != 0 {
+			t.Errorf("%v: %v, output %q", tc.args, err, out.String())
+		}
+	}
+}

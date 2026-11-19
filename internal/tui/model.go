@@ -50,6 +50,7 @@ type model struct {
 	screen                                  screen
 	referencesFrom                          screen
 	indexCursor, timelineCursor, refsCursor cursor
+	changed                                 bool
 	err, fatal                              error
 	helpScroll                              int
 	help, enteringID                        bool
@@ -63,11 +64,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		widthChanged := m.width != msg.Width
 		m.width, m.height = msg.Width, msg.Height
-		m.indexCursor.reflow(m.page())
-		m.timelineCursor.reflow(m.page())
-		m.refsCursor.reflow(m.page())
-		if (widthChanged || m.inspector == nil) && m.usable() {
-			m.reflowInspector()
+		if m.usable() {
+			m.indexCursor.reflow(m.page())
+			m.timelineCursor.reflow(m.page())
+			m.refsCursor.reflow(m.page())
+			if widthChanged || m.inspector == nil {
+				m.reflowInspector()
+			}
 		}
 	case result:
 		return m, m.accept(msg)
@@ -93,7 +96,8 @@ func (m *model) accept(msg result) tea.Cmd {
 	switch {
 	case msg.err != nil:
 		m.err = msg.err
-		if m.screen == indexScreen && m.index.Incidents == nil {
+		m.changed = errors.Is(msg.err, errChanged)
+		if msg.unreadable || (m.screen == indexScreen && m.index.Incidents == nil) {
 			m.fatal = msg.err
 			return tea.Quit
 		}
@@ -114,7 +118,7 @@ func (m *model) key(key tea.KeyMsg) tea.Cmd {
 		m.discard()
 		return tea.Quit
 	}
-	if !m.usable() {
+	if !m.usable() || m.changed {
 		return nil
 	}
 	if m.help {
@@ -183,9 +187,6 @@ func (m *model) detailKey(key string) tea.Cmd {
 	case "r":
 		return m.reloadDetail()
 	case "w":
-		if errors.Is(m.err, errChanged) {
-			return nil
-		}
 		windows := [...]time.Duration{30 * time.Second, 2 * time.Minute, 5 * time.Minute}
 		m.window = (m.window + 1) % len(windows)
 		m.wanted.before, m.wanted.after = windows[m.window], windows[m.window]
@@ -236,6 +237,9 @@ func (m *model) editID(key string) tea.Cmd {
 }
 
 func (m *model) back() tea.Cmd {
+	if m.screen == indexScreen {
+		return nil
+	}
 	m.discard()
 	m.err = nil
 	switch m.screen {

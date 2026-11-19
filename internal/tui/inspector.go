@@ -36,6 +36,12 @@ func observationLabel(row *investigate.TimelineObservation) string {
 			break
 		}
 	}
+	for _, finding := range row.Reports {
+		if finding.Conflict {
+			label += " · conflicting reports"
+			break
+		}
+	}
 	if row.DetailsOmitted {
 		label += " · details omitted"
 	}
