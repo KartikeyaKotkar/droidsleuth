@@ -182,67 +182,94 @@ func Replay(ctx context.Context, path string, header func(Metadata) error, visit
 		return err
 	}
 	defer db.Close()
-	var version int
-	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+	meta, err := readMetadata(ctx, db)
+	if err != nil {
 		return err
-	}
-	if version != 1 && version != SchemaVersion {
-		return fmt.Errorf("unsupported session schema %d", version)
-	}
-	var raw sql.NullString
-	if err := db.QueryRowContext(ctx, "SELECT CASE WHEN length(CAST(payload AS BLOB)) <= 65536 THEN payload END FROM metadata WHERE id=1").Scan(&raw); err != nil {
-		return err
-	}
-	if !raw.Valid {
-		return errors.New("stored metadata exceeds 64 KiB")
-	}
-	var meta Metadata
-	if err := json.Unmarshal([]byte(raw.String), &meta); err != nil {
-		return err
-	}
-	if meta.Schema != version {
-		return errors.New("inconsistent metadata schema")
-	}
-	switch meta.Status {
-	case "recording", "interrupted", "complete", "failed":
-	default:
-		return errors.New("unknown recording status")
 	}
 	if err := header(meta); err != nil {
 		return err
 	}
-	rows, err := db.QueryContext(ctx, `SELECT sequence,
+	return scanRecords(ctx, db, meta.Schema, visit)
+}
+
+type recordingQuery interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func readMetadata(ctx context.Context, q recordingQuery) (Metadata, error) {
+	var version int
+	if err := q.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return Metadata{}, err
+	}
+	if version != 1 && version != SchemaVersion {
+		return Metadata{}, fmt.Errorf("unsupported session schema %d", version)
+	}
+	var raw sql.NullString
+	if err := q.QueryRowContext(ctx, "SELECT CASE WHEN length(CAST(payload AS BLOB)) <= 65536 THEN payload END FROM metadata WHERE id=1").Scan(&raw); err != nil {
+		return Metadata{}, err
+	}
+	if !raw.Valid {
+		return Metadata{}, errors.New("stored metadata exceeds 64 KiB")
+	}
+	var meta Metadata
+	if err := json.Unmarshal([]byte(raw.String), &meta); err != nil {
+		return Metadata{}, err
+	}
+	if meta.Schema != version {
+		return Metadata{}, errors.New("inconsistent metadata schema")
+	}
+	switch meta.Status {
+	case "recording", "interrupted", "complete", "failed":
+	default:
+		return Metadata{}, errors.New("unknown recording status")
+	}
+	return meta, nil
+}
+
+const selectRecords = `SELECT sequence,
 CASE WHEN length(CAST(payload AS BLOB)) <= 65536 THEN payload END
-FROM observations ORDER BY sequence`)
+FROM observations`
+
+func scanRecords(ctx context.Context, q recordingQuery, version int, visit func(Record) error) error {
+	rows, err := q.QueryContext(ctx, selectRecords+" ORDER BY sequence")
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var seq int64
-		var payload sql.NullString
-		if err := rows.Scan(&seq, &payload); err != nil {
+		record, err := readRecord(rows, version)
+		if err != nil {
 			return err
-		}
-		if !payload.Valid {
-			return errors.New("stored observation exceeds 64 KiB")
-		}
-		var record Record
-		if err := json.Unmarshal([]byte(payload.String), &record); err != nil {
-			return fmt.Errorf("observation %d: %w", seq, err)
-		}
-		if record.Sequence != seq {
-			return fmt.Errorf("inconsistent observation sequence %d", seq)
-		}
-		if version == 1 && (record.Source != "" || record.Evidence != nil || record.SourceStatus != nil || record.Kind == "evidence") {
-			return errors.New("schema 2 record in schema 1 recording")
-		}
-		if err := validateRecord(record); err != nil {
-			return fmt.Errorf("observation %d: %w", seq, err)
 		}
 		if err := visit(record); err != nil {
 			return err
 		}
 	}
 	return rows.Err()
+}
+
+func readRecord(row interface{ Scan(...any) error }, version int) (Record, error) {
+	var seq int64
+	var payload sql.NullString
+	if err := row.Scan(&seq, &payload); err != nil {
+		return Record{}, err
+	}
+	if !payload.Valid {
+		return Record{}, errors.New("stored observation exceeds 64 KiB")
+	}
+	var record Record
+	if err := json.Unmarshal([]byte(payload.String), &record); err != nil {
+		return Record{}, fmt.Errorf("observation %d: %w", seq, err)
+	}
+	if record.Sequence != seq {
+		return Record{}, fmt.Errorf("inconsistent observation sequence %d", seq)
+	}
+	if version == 1 && (record.Source != "" || record.Evidence != nil || record.SourceStatus != nil || record.Kind == "evidence") {
+		return Record{}, errors.New("schema 2 record in schema 1 recording")
+	}
+	if err := validateRecord(record); err != nil {
+		return Record{}, fmt.Errorf("observation %d: %w", seq, err)
+	}
+	return record, nil
 }

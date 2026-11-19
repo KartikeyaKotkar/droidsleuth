@@ -15,7 +15,6 @@ import (
 
 	"droidsleuth/internal/adb"
 	"droidsleuth/internal/capture"
-	"droidsleuth/internal/investigate"
 	"droidsleuth/internal/session"
 )
 
@@ -30,7 +29,7 @@ func main() {
 
 func run(ctx context.Context, args []string, out, diagnostic io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: droidsleuth devices | watch [flags] PACKAGE | replay [--json] FILE | investigate [--json] FILE")
+		return errors.New("usage: droidsleuth devices | watch [flags] PACKAGE | replay [--json] FILE | investigate [--json] [--timeline] (FILE | --last)")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(diagnostic)
@@ -97,57 +96,7 @@ func run(ctx context.Context, args []string, out, diagnostic io.Writer) error {
 		}
 		return capture.Run(ctx, client, meta, capture.Options{Path: *path, Evidence: true, Visit: func(r session.Record) error { return printRecord(out, r) }})
 	case "investigate":
-		asJSON := flags.Bool("json", false, "emit versioned investigation JSON")
-		if err := flags.Parse(args[1:]); err != nil {
-			return err
-		}
-		if flags.NArg() != 1 {
-			return errors.New("usage: droidsleuth investigate [--json] FILE")
-		}
-		report, err := investigate.Analyze(ctx, flags.Arg(0))
-		if err != nil {
-			return err
-		}
-		if *asJSON {
-			return json.NewEncoder(out).Encode(report)
-		}
-		if _, err = fmt.Fprintf(out, "Package %q; %d reported events; %d observed disappearances (cause unknown)\n", report.Package, len(report.Findings), report.Disappearances); err != nil {
-			return err
-		}
-		for _, f := range report.Findings {
-			if _, err = fmt.Fprintf(out, "%s reported by %s: process=%q pid=%d device_time_ns=%d detail=%q reason=%v conflict=%t\n", f.Event.Kind, f.Source, f.Event.Process, f.Event.PID, f.Event.DeviceTimeNS, f.Event.Detail, reasonText(f.Event.Reason), f.Conflict); err != nil {
-				return err
-			}
-			if _, err = fmt.Fprintf(out, "  source excerpt (truncated=%t): %q\n", f.ExcerptTruncated, f.Excerpt); err != nil {
-				return err
-			}
-			for _, id := range f.Candidates {
-				if _, err = fmt.Fprintf(out, "  candidate instance: boot=%q uid=%d pid=%d start_ticks=%d (unproven)\n", id.BootID, id.UID, id.PID, id.StartTicks); err != nil {
-					return err
-				}
-			}
-			for _, ref := range f.Evidence {
-				if _, err = fmt.Fprintf(out, "  evidence: observation #%d lines %d..%d (available through replay --json)\n", ref.Sequence, ref.FirstLine, ref.LastLine); err != nil {
-					return err
-				}
-			}
-			for _, u := range f.Uncertainty {
-				if _, err = fmt.Fprintf(out, "  uncertainty: %s\n", u); err != nil {
-					return err
-				}
-			}
-		}
-		for _, g := range report.Gaps {
-			if err = printRecord(out, g); err != nil {
-				return err
-			}
-		}
-		for _, l := range report.Limitations {
-			if _, err = fmt.Fprintf(out, "Limitation: %s\n", l); err != nil {
-				return err
-			}
-		}
-		return nil
+		return runInvestigate(ctx, flags, args[1:], out, diagnostic)
 	case "replay":
 		asJSON := flags.Bool("json", false, "emit metadata followed by observation JSON lines")
 		if err := flags.Parse(args[1:]); err != nil {
@@ -180,6 +129,17 @@ func run(ctx context.Context, args []string, out, diagnostic io.Writer) error {
 }
 
 func defaultPath() (string, error) {
+	dir, err := managedDirectory()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, session.ManagedFilename(time.Now())), nil
+}
+
+func managedDirectory() (string, error) {
 	root := os.Getenv("XDG_STATE_HOME")
 	if root == "" || !filepath.IsAbs(root) {
 		home, err := os.UserHomeDir()
@@ -188,11 +148,7 @@ func defaultPath() (string, error) {
 		}
 		root = filepath.Join(home, ".local", "state")
 	}
-	dir := filepath.Join(root, "droidsleuth")
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, time.Now().UTC().Format("20060102T150405.000000000")+".db"), nil
+	return filepath.Join(root, "droidsleuth"), nil
 }
 
 func printRecord(out io.Writer, r session.Record) error {

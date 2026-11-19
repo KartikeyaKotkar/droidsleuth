@@ -36,10 +36,35 @@ type Report struct {
 	Disappearances int              `json:"unexplained_disappearances"`
 }
 
+func eventKey(source string, event session.Event) string {
+	event.FirstLine, event.LastLine = 0, 0
+	body, _ := json.Marshal(struct {
+		Source string
+		Event  session.Event
+	}{source, event})
+	return string(body)
+}
+
 // Analyze uses two bounded read-only passes. Timestamps identify reported events,
 // never an inferred death time. Even a unique PID/UID/name match remains only a
 // candidate: neither logcat nor exit history supplies kernel start ticks.
 func Analyze(ctx context.Context, path string) (Report, error) {
+	return analyze(func(header func(session.Metadata) error, visit func(session.Record) error) error {
+		return session.Replay(ctx, path, header, visit)
+	})
+}
+
+// AnalyzeRecording shares the investigation rules with a finalized session reader.
+func AnalyzeRecording(ctx context.Context, recording session.Recording) (Report, error) {
+	return analyze(func(header func(session.Metadata) error, visit func(session.Record) error) error {
+		if err := header(recording.Metadata); err != nil {
+			return err
+		}
+		return recording.Scan(ctx, visit)
+	})
+}
+
+func analyze(replay func(func(session.Metadata) error, func(session.Record) error) error) (Report, error) {
 	r := Report{Version: 1, Findings: []Finding{}, Gaps: []session.Record{}, Limitations: []string{
 		"Reports describe source claims, not proven causes of observed disappearance.",
 		"Logcat is a finite filtered tail; silent buffer loss and incidents before collection may be unobservable.",
@@ -51,7 +76,7 @@ func Analyze(ctx context.Context, path string) (Report, error) {
 	}
 	instances := map[session.Identity]*instance{}
 	capped := false
-	err := session.Replay(ctx, path, func(m session.Metadata) error {
+	err := replay(func(m session.Metadata) error {
 		r.Package = m.Package
 		if m.Schema == 1 {
 			r.Limitations = append(r.Limitations, "Schema 1 contains no diagnostic collectors.")
@@ -100,7 +125,7 @@ func Analyze(ctx context.Context, path string) (Report, error) {
 		return a.StartTicks < b.StartTicks
 	})
 	keys := map[string]int{}
-	err = session.Replay(ctx, path, func(session.Metadata) error { return nil }, func(record session.Record) error {
+	err = replay(func(session.Metadata) error { return nil }, func(record session.Record) error {
 		if record.Kind == "gap" {
 			if len(r.Gaps) < 256 {
 				r.Gaps = append(r.Gaps, record)
@@ -113,14 +138,7 @@ func Analyze(ctx context.Context, path string) (Report, error) {
 			return nil
 		}
 		for _, event := range record.Evidence.Events {
-			keyEvent := event
-			keyEvent.FirstLine = 0
-			keyEvent.LastLine = 0
-			keyBody, _ := json.Marshal(struct {
-				Source string
-				Event  session.Event
-			}{record.Source, keyEvent})
-			key := string(keyBody)
+			key := eventKey(record.Source, event)
 			ref := Reference{record.Sequence, event.FirstLine, event.LastLine}
 			if index, ok := keys[key]; ok {
 				if len(r.Findings[index].Evidence) < 16 {
