@@ -1626,3 +1626,154 @@ The handoff scans the finalized file once, so a slow or damaged recording may
 require explicit-file retry. The summary's five entries come from the bounded
 index, and retained reports can be delayed or absent. Repository-wide
 compatibility and diagnostic source limitations above still apply.
+
+## v0.1 release-readiness gate
+
+### Java fatal evidence on API 37
+
+The historical handoff recording retained seven successful logcat polls with
+zero selected observations. Android exit history and an independent
+crash-buffer inspection identified the Java crash. That run retained no raw
+poll replies, so the exact original retrieval path remains unverified.
+
+The release gate reproduced the same symptom on commit `a4f4864` with the
+API 37 Google Play x86-64 image (build 16418371, fingerprint
+`google/sdk_gphone64_x86_64/emu64xa:17/CE2A.260420.051.A2/16418371:user/release-keys`),
+ADB 1.0.41, and ordinary shell UID 2000. Three ordinary fixture crashes
+had an exit-history report and lacked a corresponding stored Java fatal.
+One run used the uninstrumented collector. In the matched instrumented run,
+four consecutive actual merged numeric-tail reads after the crash returned
+zero bytes with exit status 0. Crash-only replies taken 17–28 ms later
+each contained the matching stack. A separate exact merged request caught
+the same stack closer to the crash, and device-time cursors covering the
+crash returned it in both buffer sets. The results locate the reproduced
+failure at retrieval. Parsing, deduplication, and persistence received
+no bytes for those missing reports.
+
+The AOSP log reader selects a finite tail from the requested buffers before
+logcat's tag display filter. A reported success with zero selected lines
+therefore provides no evidence about the unfiltered volume or the retention
+of a particular crash. Poll timing determines whether a merged numeric tail
+still contains the stack. The affected emulator's crash-only buffer retained
+it through the missed polls. [AOSP logcat implementation](https://android.googlesource.com/platform/system/logging/+/refs/heads/main/logcat/logcat.cpp)
+
+Commit `68c696c` adds a separate 512-entry crash-buffer tail to numeric
+logcat polls. The two reads share one ADB invocation and the existing boot
+bracket, transport deadline, and output budget. A fixed frame separates the
+two inputs so the parser cannot assemble a stack across reads. Identical
+evidence is deduplicated before the observation limit. A failed crash-only
+read creates a diagnostic coverage gap and can still retain independently
+verified merged data. A missing frame, transport failure, or failed boot
+bracket withholds the affected reply. The merged timestamp-cursor path still
+runs a single logcat command per poll. A crash-tail line can seed a cursor
+when the merged tail has no decodable line. The observation schema and
+lifecycle, CPU/RSS, and attribution rules are unchanged.
+
+To reproduce the device comparison, use the task-owned disposable fixture and
+an approved emulator. During an ordinary fixture Java crash, capture the
+stock poll trace and sample the following pairs as close together as possible.
+Use the same device epoch interval in both cursor probes and alternate which
+buffer list is read first. Retain the exit status, host timing, and only the
+matched fixture lines. Inspect the capture with `replay --json` for
+`source_status` and source coverage gaps.
+
+```sh
+# Substitute the verified emulator serial and a device-epoch start before the crash.
+serial=emulator-5584
+cursor=1700000000.000000
+adb -s "$serial" shell -T "logcat -d -t 512 -v threadtime -v epoch -v uid -v usec -b main -b crash -b system -b events 'AndroidRuntime:E' 'DEBUG:F' 'am_crash:I' 'am_anr:I' '*:S'"
+adb -s "$serial" shell -T "logcat -d -t 512 -v threadtime -v epoch -v uid -v usec -b crash 'AndroidRuntime:E' 'DEBUG:F' 'am_crash:I' 'am_anr:I' '*:S'"
+adb -s "$serial" shell -T "logcat -d -T '$cursor' -v threadtime -v epoch -v uid -v usec -b main -b crash -b system -b events 'AndroidRuntime:E' 'DEBUG:F' 'am_crash:I' 'am_anr:I' '*:S'"
+adb -s "$serial" shell -T "logcat -d -T '$cursor' -v threadtime -v epoch -v uid -v usec -b crash 'AndroidRuntime:E' 'DEBUG:F' 'am_crash:I' 'am_anr:I' '*:S'"
+go test ./internal/evidence -run 'Test.*(CrashTail|NumericLogcat|NumericTails)' -count=1
+```
+
+The regression fixture preserves the relevant captured headers with normalized
+time, PID, UID, and package. Tests assert retention from an otherwise empty
+merged read, ADB call count, the transition to the existing cursor path,
+duplicate suppression, independent frame parsing, and rejection of malformed
+or unverified input. Raw trial traces and the temporary harness are local
+under ignored `.validation/v01`.
+
+### Release acceptance
+
+The final collector captured a Java fatal for the matching PID in all three
+ordinary API 37 trials. Their report anchors were `E43.0`, `E44.0`, and
+`E46.0` in their respective recordings. A separate force-stop produced
+`L43.0` with an unknown disappearance cause. The same recovery approach also
+captured the current Java fatal in an observed timestamp-cursor trial and
+during a bounded 1,600-message burst of unrelated logs on API 37.
+
+The API 30 AOSP x86-64 smoke recorded the fixture's Java fatal and
+disappearance with shell UID 2000. The fresh emulator also produced an
+empty finalized recording before the first launch. The unavailable-serial
+startup check created no database. Automated checks cover diagnostic
+degradation, startup and finalization failures, cancellation, and the
+empty summary path. The API 30 app, AVD, and temporarily downloaded system
+image were removed after the smoke.
+
+The exact-file handoff opened all four API 37 acceptance anchors through
+text and the TUI with ADB absent, including the matching report, uncertainty,
+and terminal restoration. SHA-256 fingerprints were unchanged. The
+baseline and candidate produced identical repeated replay, investigation,
+timeline, and selected detail output on identical schema-1, schema-2,
+and schema-3 inputs. The comparison included a synthetic schema-1 file,
+retained emulator and historical physical recordings, and three new
+API 30/37 recordings. The physical recording was used offline.
+
+### Collector cost
+
+The API 37 emulator ran matched baseline/candidate/candidate/baseline windows
+with an idle fixture and again with one 1,600-message unrelated burst per
+window. The windows were 45 seconds each, shorter than the proposed five
+minutes. Each window contained 43 successful snapshots and no snapshot
+coverage gaps. Host CPU includes the capture process and its waited ADB
+children. RSS is the peak of the process tree sampled at 100 ms intervals.
+The table uses the median of the two window p95s and CPU values per mode,
+and the largest sampled RSS.
+
+| Condition | Build | Snapshot cadence p95 | Host CPU, one core | Peak RSS | Database bytes |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Idle | Baseline | 1056.31 ms | 1.490% | 32,168 KiB | 73,728 |
+| Idle | Candidate | 1053.33 ms | 1.461% | 27,720 KiB | 139,264 |
+| Unrelated burst | Baseline | 1056.08 ms | 1.458% | 36,352 KiB | 73,728 |
+| Unrelated burst | Candidate | 1059.27 ms | 1.494% | 26,928 KiB | 139,264 |
+
+Each window issued 15 logcat ADB calls. The baseline used numeric tails
+throughout, while the candidate used one pair of numeric tails within one
+ADB call followed by 14 timestamp-cursor reads. The larger candidate
+databases retained older crash stacks and additional diagnostic coverage
+gaps. Every candidate window had 16 logcat gaps versus two baseline gaps.
+The candidate recorded a malformed-data gap on each cursor read. A scoped
+trace of that cursor behavior showed the API 37 PID-first `am_crash` layout
+already rejected by the parser. The layout remains unsupported. The gaps
+are diagnostic and leave snapshot continuity intact.
+
+In eight interleaved numeric-command pairs, Android `time -v` measured
+median user plus system CPU of 10.23 ms for the merged tail and 22.48 ms
+for the combined command. The median paired increase was 11.90 ms.
+Median host-observed wall time was 63.17 ms and 77.90 ms respectively.
+The command timing excludes work charged to separate Android services.
+Its output increased from zero to a median 26,277 bytes on this recording
+history. This measures the additional numeric read on the disposable emulator.
+It does not establish physical-device CPU, battery, or thermal costs.
+
+Cadence, host CPU and RSS stayed within the release limits. Go 1.23.12
+passed `go mod verify`, `go test ./...`, `go test -race ./...`, and
+`go vet ./...`. Both disposable AVDs were removed, and no physical-device
+workload ran.
+
+### Local release candidate
+
+**Verdict: release-readiness gates passed for the tested scope.** The
+reproduced ordinary Java fatal loss is fixed for the tested numeric-tail
+scenario. Finite retention, format differences, and incomplete source
+coverage remain documented limits.
+
+`scripts/package-release.sh NEW_OUTPUT_DIRECTORY` builds from a clean local
+commit with Go 1.23.12 and verified module dependencies. It emits a
+Linux amd64 tarball and `SHA256SUMS`. The archive contains the CLI, README,
+license, dependency notices, release notes, and source and toolchain
+metadata. It uses normalized archive ordering, ownership, modes, and
+timestamps. Local build logs and artifacts are kept under ignored
+`.validation/v01`.

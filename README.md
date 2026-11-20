@@ -9,6 +9,20 @@ Process identity combines boot ID, UID, PID and kernel start ticks. Process
 disappearance establishes an observation, with cause unknown. Diagnostic
 reports and candidate process associations carry their own uncertainty.
 
+## Install on Linux amd64
+
+From the directory containing the release archive and its `SHA256SUMS` file:
+
+```sh
+sha256sum -c SHA256SUMS
+tar -xzf droidsleuth-v0.1.0-rc1-linux-amd64.tar.gz
+install -Dm755 droidsleuth-v0.1.0-rc1-linux-amd64/droidsleuth "$HOME/.local/bin/droidsleuth"
+```
+
+Add `$HOME/.local/bin` to PATH or invoke the installed binary by its full path.
+The archive includes its source revision, toolchain, and dependency notices.
+See [release notes](RELEASE_NOTES.md) for the tested platforms and limitations.
+
 ## Build and capture
 
 Requires Go 1.23 or newer. Live capture uses Android platform-tools on PATH
@@ -107,7 +121,24 @@ observations about the process and do not establish an incident's cause.
 
 Recordings are private files (`0600`), and the default recording directory is
 `0700`. Sessions may contain package names, device serials, timing information
-and selected diagnostic text. Treat them as private diagnostic data.
+and selected diagnostic text. Review the contents before sharing a database,
+JSON export, or terminal transcript.
+
+### Troubleshooting
+
+- If `devices` cannot find ADB, install Android SDK Platform-Tools and put its
+  `adb` executable on PATH. If a device appears as `unauthorized`, unlock it
+  and approve the USB debugging prompt. With multiple targets, pass
+  `--device SERIAL` to `watch`.
+- If the package probe fails, check that the package is installed for the
+  selected Android user. Live capture requires API 30 or later, readable
+  identity files, and supported process-list columns. Secondary, custom-named,
+  and isolated processes are outside the main-process lifecycle tracker.
+- If an expected crash or ANR is missing, check the exact recording with
+  `investigate --timeline FILE` and review coverage with `replay FILE`. Android's
+  finite log buffers and bounded filtered reads can miss reports. A successful
+  read with zero selected observations establishes only what that read returned.
+  Android exit history may report the same incident independently when available.
 
 ### Interactive incident browser
 
