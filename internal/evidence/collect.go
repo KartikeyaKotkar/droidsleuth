@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,11 @@ import (
 )
 
 const LogcatCommand = `logcat -d -t 512 -v threadtime -v epoch -v uid -v usec -b main -b crash -b system -b events 'AndroidRuntime:E' 'DEBUG:F' 'am_crash:I' 'am_anr:I' '*:S'`
+
+const (
+	crashTailBoundary = "\n--------- droidsleuth crash tail\n"
+	crashTailFailure  = "\n--------- droidsleuth crash tail failed\n"
+)
 
 type shell interface {
 	Shell(context.Context, string) (string, error)
@@ -56,58 +62,7 @@ func Start(ctx context.Context, s shell, meta session.Metadata) (<-chan session.
 				var observations []session.Evidence
 				var issue string
 				if source == "logcat" {
-					boot, err := s.Shell(ctx, "cat /proc/sys/kernel/random/boot_id")
-					if err != nil {
-						issue = "logcat boot identity unavailable"
-					} else {
-						command := LogcatCommand
-						if previous != "" {
-							if last, ok := decode(previous); ok && last.ns > 1000 {
-								cursor := last.ns - 1000
-								command = strings.Replace(LogcatCommand, "-t 512", fmt.Sprintf("-T '%d.%06d'", cursor/1e9, (cursor%1e9)/1000), 1)
-							}
-						}
-						raw, err := s.Shell(ctx, command)
-						if err != nil {
-							issue = "logcat read failed or disconnected"
-							previous = ""
-						} else {
-							lines := strings.Split(strings.TrimSuffix(raw, "\n"), "\n")
-							overlap := false
-							for _, rawLine := range strings.Split(strings.TrimSuffix(raw, "\n"), "\n") {
-								if rawLine == previous {
-									overlap = true
-									break
-								}
-							}
-							if previous != "" && !overlap {
-								issue = "logcat tail overlap lost: rollover, truncation or source reset"
-							}
-							if command == LogcatCommand && len(lines) >= 512 {
-								issue = "logcat bounded tail saturated; records may be lost"
-							}
-							var bad bool
-							endBoot, bootErr := s.Shell(ctx, "cat /proc/sys/kernel/random/boot_id")
-							if bootErr != nil || strings.TrimSpace(endBoot) != strings.TrimSpace(boot) {
-								issue = "boot changed or became unavailable during logcat read"
-								raw = ""
-								lines = nil
-								previous = ""
-							} else {
-								observations, bad = Logcat(raw, meta, strings.TrimSpace(boot))
-							}
-							if bad {
-								issue = "logcat malformed or oversized records; diagnostic coverage incomplete"
-							}
-							previous = ""
-							for i := len(lines) - 1; i >= 0; i-- {
-								if _, ok := decode(lines[i]); ok {
-									previous = lines[i]
-									break
-								}
-							}
-						}
-					}
+					observations, issue = readLogcat(ctx, s, meta, &previous)
 				} else {
 					zone, ze := s.Shell(ctx, "getprop persist.sys.timezone")
 					raw, err := s.Shell(ctx, "dumpsys activity exit-info "+meta.Package)
@@ -184,4 +139,98 @@ func Start(ctx context.Context, s shell, meta session.Metadata) (<-chan session.
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(out); close(done) }()
 	return out, func() { cancel(); <-done }
+}
+
+// readLogcat keeps the crash buffer's numeric tail independent of traffic in
+// the other buffers. Both bounded reads share one ADB call and boot bracket.
+func readLogcat(ctx context.Context, s shell, meta session.Metadata, previous *string) ([]session.Evidence, string) {
+	boot, err := s.Shell(ctx, "cat /proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return nil, "logcat boot identity unavailable"
+	}
+	command := LogcatCommand
+	numeric := true
+	if last, ok := decode(*previous); ok && last.ns > 1000 {
+		cursor := last.ns - 1000
+		command = strings.Replace(command, "-t 512", fmt.Sprintf("-T '%d.%06d'", cursor/1e9, (cursor%1e9)/1000), 1)
+		numeric = false
+	}
+	if numeric {
+		crash := strings.Replace(LogcatCommand, "-b main -b crash -b system -b events", "-b crash", 1)
+		command += ` && printf '\n--------- droidsleuth crash tail\n' && { ` + crash + ` || printf '\n--------- droidsleuth crash tail failed\n'; }`
+	}
+	raw, err := s.Shell(ctx, command)
+	if err != nil {
+		*previous = ""
+		return nil, "logcat read failed or disconnected"
+	}
+	endBoot, err := s.Shell(ctx, "cat /proc/sys/kernel/random/boot_id")
+	boot = strings.TrimSpace(boot)
+	if err != nil || boot == "" || strings.TrimSpace(endBoot) != boot {
+		*previous = ""
+		return nil, "boot changed or became unavailable during logcat read"
+	}
+	issue := ""
+	crashFailed := false
+	reads := []string{raw}
+	if numeric {
+		merged, crash, ok := strings.Cut(raw, crashTailBoundary)
+		if !ok || strings.Contains(crash, crashTailBoundary) {
+			*previous = ""
+			return nil, "logcat crash tail framing incomplete"
+		}
+		if strings.HasSuffix(crash, crashTailFailure) {
+			reads = []string{merged}
+			crashFailed = true
+		} else {
+			reads = []string{merged, crash}
+		}
+	}
+	marker := ""
+	var observations []session.Evidence
+	for i, read := range reads {
+		lines := strings.Split(strings.TrimSuffix(read, "\n"), "\n")
+		if !numeric && *previous != "" && !slices.Contains(lines, *previous) {
+			issue = "logcat tail overlap lost: rollover, truncation or source reset"
+		}
+		if numeric && len(lines) >= 512 {
+			issue = "logcat bounded tail saturated; records may be lost"
+		}
+		found, malformed := Logcat(read, meta, boot)
+		if malformed {
+			issue = "logcat malformed or oversized records; diagnostic coverage incomplete"
+		}
+		if i == 0 {
+			observations = found
+		} else {
+			// Identical source text from this boot normalizes to the same event.
+			seen := make(map[string]struct{}, len(observations))
+			for _, observation := range observations {
+				seen[observation.Text] = struct{}{}
+			}
+			for _, observation := range found {
+				if _, exists := seen[observation.Text]; !exists {
+					observations = append(observations, observation)
+				}
+			}
+		}
+		// Keep the merged marker when available. The crash copy can seed a
+		// cursor if the merged read yields no decodable records.
+		if marker == "" {
+			for i := len(lines) - 1; i >= 0; i-- {
+				if _, ok := decode(lines[i]); ok {
+					marker = lines[i]
+					break
+				}
+			}
+		}
+	}
+	if crashFailed {
+		if issue != "" {
+			issue += ". "
+		}
+		issue += "logcat crash-only tail read failed"
+	}
+	*previous = marker
+	return observations, issue
 }

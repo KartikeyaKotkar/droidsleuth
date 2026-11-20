@@ -40,10 +40,14 @@ func (s *isolationShell) Shell(ctx context.Context, command string) (string, err
 		}
 		return "Permission Denial", nil
 	case strings.Contains(command, "logcat"):
-		if s.diagnostic == "unknown UID" {
-			return "1700000000.123456 OEM_UID 101 101 E AndroidRuntime: FATAL EXCEPTION: main\n1700000000.123456 OEM_UID 101 101 E AndroidRuntime: Process: com.example.app, PID: 101", nil
+		boundary := ""
+		if strings.Contains(command, "droidsleuth crash tail") {
+			boundary = "\n--------- droidsleuth crash tail\n"
 		}
-		return "logd: truncated fixture", nil
+		if s.diagnostic == "unknown UID" {
+			return "1700000000.123456 OEM_UID 101 101 E AndroidRuntime: FATAL EXCEPTION: main\n1700000000.123456 OEM_UID 101 101 E AndroidRuntime: Process: com.example.app, PID: 101" + boundary, nil
+		}
+		return "logd: truncated fixture" + boundary, nil
 	}
 	return "", ctx.Err()
 }

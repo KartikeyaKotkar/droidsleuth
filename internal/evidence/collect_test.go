@@ -64,7 +64,7 @@ case "$*" in
  *random/boot_id*) printf 'boot\n';;
  *persist.sys.timezone*) printf 'UTC\n';;
  *exit-info*) printf 'ACTIVITY MANAGER PROCESS EXIT INFO\n';;
- *logcat*) cat "$FIXTURE_LOG";;
+ *logcat*) cat "$FIXTURE_LOG"; case "$*" in *'droidsleuth crash tail'*) printf '\n--------- droidsleuth crash tail\n';; esac;;
  *) exit 1;;
 esac
 `
@@ -122,7 +122,8 @@ case "$*" in
  *exit-info*) printf 'ACTIVITY MANAGER PROCESS EXIT INFO\n';;
  *logcat*)
   if [ ! -f "$FIXTURE_READY" ]; then touch "$FIXTURE_READY"; exit 1; fi
-  printf '1700000000.123456 1000 900 900 I am_anr: [0,42,com.example.app,0,fixture timeout]\n';;
+  printf '1700000000.123456 1000 900 900 I am_anr: [0,42,com.example.app,0,fixture timeout]\n'
+  case "$*" in *'droidsleuth crash tail'*) printf '\n--------- droidsleuth crash tail\n';; esac;;
  *) exit 1;;
 esac
 `

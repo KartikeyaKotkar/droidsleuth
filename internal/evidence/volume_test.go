@@ -63,6 +63,9 @@ func (s volumeSource) Shell(ctx context.Context, command string) (string, error)
 	if strings.Contains(command, "exit-info") {
 		return "ACTIVITY MANAGER PROCESS EXIT INFO", nil
 	}
+	if strings.Contains(command, "droidsleuth crash tail") {
+		return s.raw + crashTailBoundary, nil
+	}
 	return s.raw, nil
 }
 func TestSourceObservationLimitAndQueueCancellation(t *testing.T) {

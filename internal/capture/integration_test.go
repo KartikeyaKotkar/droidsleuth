@@ -184,7 +184,7 @@ case "$*" in
  *random/boot_id*) printf 'fixture-boot\n';;
  *persist.sys.timezone*) printf 'UTC\n';;
  *exit-info*) printf 'Unknown command\n';;
- *logcat*) cat "$DROIDSLEUTH_FIXTURES/logcat";;
+ *logcat*) cat "$DROIDSLEUTH_FIXTURES/logcat"; case "$*" in *'droidsleuth crash tail'*) printf '\n--------- droidsleuth crash tail\n';; esac;;
  *) exec "$DROIDSLEUTH_FIXTURES/adb-snapshots" "$@";;
 esac
 `

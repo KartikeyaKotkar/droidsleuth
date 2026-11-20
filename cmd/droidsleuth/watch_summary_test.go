@@ -52,7 +52,8 @@ case "$3" in
         printf '%s\n' history >> "$root/trace"; echo 'ACTIVITY MANAGER PROCESS EXIT INFO';;
     logcat\ *)
         printf '%s\n' logcat >> "$root/trace"
-        echo '1700000000.123456 1000 900 900 I am_anr: [0,101,com.example.app,0,fixture report]';;
+        echo '1700000000.123456 1000 900 900 I am_anr: [0,101,com.example.app,0,fixture report]'
+        case "$*" in *'droidsleuth crash tail'*) printf '\n--------- droidsleuth crash tail\n';; esac;;
     *) printf '%s\n' unexpected >> "$root/trace"; exit 1;;
 esac
 `

@@ -54,7 +54,7 @@ func (s *embeddedMarkerShell) Shell(ctx context.Context, command string) (string
 		return "ACTIVITY MANAGER PROCESS EXIT INFO", nil
 	case strings.Contains(command, "logcat"):
 		if s.calls.Add(1) == 1 {
-			return s.marker, nil
+			return s.marker + crashTailBoundary, nil
 		}
 		return logline("10124", 202, "AndroidRuntime", "embedded marker: "+s.marker), nil
 	}

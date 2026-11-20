@@ -59,5 +59,7 @@ elif command.startswith("logcat"):
             print("logd: synthetic truncated record")
         sys.stdout.write(event(1700000000))
         print(f"1700000000.123457 10124 202 202 E AndroidRuntime: unrelated-private-sentinel-{n}")
+    if "droidsleuth crash tail" in command:
+        print("\n--------- droidsleuth crash tail")
 else:
     sys.exit(91)

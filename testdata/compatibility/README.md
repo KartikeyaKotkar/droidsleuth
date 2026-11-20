@@ -22,3 +22,8 @@ go test ./internal/evidence -run TestEmulatorProvenanceFixtures -count=1 -v
 
 Full runtime source availability, image revisions, endurance durations and
 unexecuted matrix cells are recorded in IMPLEMENTATION.md.
+
+`api37-crash-buffer-tail.txt` preserves the crash, process, and exception
+headers from the v0.1 API 37 rehearsal. The merged 512-entry read returned
+empty and the crash-only read immediately afterward returned these lines.
+The fixture strips the rest of the stack and normalizes identifiers and time.
