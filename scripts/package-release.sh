@@ -37,7 +37,7 @@ bundle="$work/$name"
     unset GOEXPERIMENT
     go mod verify
     go build -mod=readonly -trimpath -buildvcs=false -o "$bundle/droidsleuth" ./cmd/droidsleuth
-    go list -mod=readonly -deps -f '{{if and .Module (not .Module.Main)}}{{.Module.Path}}{{"\t"}}{{.Module.Version}}{{"\t"}}{{.Module.Dir}}{{end}}' ./cmd/droidsleuth |
+    go list -mod=readonly -buildvcs=false -deps -f '{{if and .Module (not .Module.Main)}}{{.Module.Path}}{{"\t"}}{{.Module.Version}}{{"\t"}}{{.Module.Dir}}{{end}}' ./cmd/droidsleuth |
         sed '/^$/d' | sort -u > "$work/modules"
 
     toolchain=$(go env GOROOT)
