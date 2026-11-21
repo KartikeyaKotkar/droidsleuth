@@ -11,17 +11,16 @@ reports and candidate process associations carry their own uncertainty.
 
 ## Install on Linux amd64
 
-Download the archive and `SHA256SUMS` from the [v0.1.0 release](https://github.com/KartikeyaKotkar/droidsleuth/releases/tag/v0.1.0).
+Download `droidsleuth-v0.2.0-linux-amd64.tar.gz` and `SHA256SUMS` together from the [v0.2.0 release](https://github.com/KartikeyaKotkar/droidsleuth/releases/tag/v0.2.0). For a local release candidate, use the supplied archive and checksum file.
 
 ```sh
 sha256sum -c SHA256SUMS
-tar -xzf droidsleuth-v0.1.0-linux-amd64.tar.gz
-install -Dm755 droidsleuth-v0.1.0-linux-amd64/droidsleuth "$HOME/.local/bin/droidsleuth"
+tar -xzf droidsleuth-v0.2.0-linux-amd64.tar.gz
+install -Dm755 droidsleuth-v0.2.0-linux-amd64/droidsleuth "$HOME/.local/bin/droidsleuth"
 ```
 
 Add `$HOME/.local/bin` to PATH or invoke the installed binary by its full path.
 The archive includes its source revision, toolchain, and dependency notices.
-Build the current checkout to use `collect-history`.
 
 ## Build and capture
 
@@ -80,14 +79,15 @@ control characters or invalid UTF-8.
 
 ## Collect exit history after an incident
 
-If the app has already exited, use a build from this checkout to save Android's
-retained exit reports. The package must still be installed for the selected
-Android user.
+If the app has already exited, DroidSleuth v0.2.0 can save Android's retained
+exit reports without a live recording. Set up Android SDK Platform-Tools and
+confirm authorization with `droidsleuth devices`. The package must still be
+installed for the selected Android user.
 
 ```sh
-./droidsleuth collect-history --out incident.db com.example.app
-./droidsleuth investigate --timeline incident.db
-./droidsleuth investigate --tui incident.db
+droidsleuth collect-history --out incident.db com.example.app
+droidsleuth investigate --timeline incident.db
+droidsleuth investigate --tui incident.db
 ```
 
 Use a new output path. `--device SERIAL` and `--user ID` select the target
@@ -95,11 +95,15 @@ when needed. The command performs one package-scoped history read. The
 recording describes what Android reported and when DroidSleuth retrieved it.
 It contains no live process samples, CPU/RSS measurements, or logcat stack
 excerpts. Android's reported reason and occurrence time can be examined
-offline. Exact process instance association remains unproven.
+offline. Raw occurrence time is preserved when the wall time or device zone
+cannot be resolved. Android supplies a zone at retrieval, which can differ
+from the zone at the incident. Exact process instance association remains
+unproven.
 
 An empty successful read means Android returned no matching retained reports.
-Retention limits, package removal, and UID changes can affect availability.
-If the source is denied, unsupported, or damaged, the command exits nonzero.
+Reports may expire or arrive late. Package removal, UID changes, and OEM
+permissions or output formats can limit availability. If the source is
+denied, unsupported, or damaged, the command exits nonzero.
 When a recording was created, use the printed path to inspect any retained
 reports and coverage gaps.
 
@@ -202,8 +206,9 @@ python3 scripts/validate-tui.py ./droidsleuth session.db
 
 See [IMPLEMENTATION.md](IMPLEMENTATION.md) for behavior, validation and source
 limitations. Historical physical checks used one API 37 phone. Emulator checks
-covered API 30, 33, 35, 36 and 37. [PLAN.md](PLAN.md) is the research and roadmap
-brief.
+covered API 30, 33, 35, 36 and 37. The v0.2.0 post-exit workflow was verified
+on API 30 AOSP and API 37 Google Play x86-64 emulators. [PLAN.md](PLAN.md)
+is the research and roadmap brief.
 
 ## License
 

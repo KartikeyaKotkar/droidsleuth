@@ -1853,3 +1853,98 @@ and the shared read uses the same shell commands and bounds. The
 runtime proof is emulator-only. OEM permissions, retention, package
 removal, and UID changes can limit available history. Local artifacts
 are under ignored `.validation/v02`.
+
+## v0.2.0 release-readiness gate
+
+Reviewed against `0de023d` with Go 1.23.12 on Linux amd64. Regression tests
+first reproduced signed nanosecond wraparound from an out-of-range `UnixNano`
+conversion, a malformed or unsupported body reported as a successful empty
+read, and adjacent package section text in the selected excerpt. The parser
+now leaves unrepresentable instants unknown, rejects unrecognized empty
+layouts and malformed entry headers, and ends excerpts at package or UID
+section boundaries. Both capture modes share the fix. It adds no ADB calls.
+
+### Correctness and compatibility
+
+- Fake ADB exercised current and explicit Android user selection, matching
+  package and UID, cross-user reports, package-prefix lookalikes and another
+  package sharing the selected UID. A failed timezone probe retained the
+  selected report and raw timestamp. Parser fixtures covered an invalid or
+  blank zone, `Local`, DST folds and spring gaps, malformed dates, signed
+  nanosecond bounds and a valid non-UTC conversion under different host
+  zones. Before this gate the date `2500-01-01 00:00:00.000` yielded
+  `-1721518473709551616` ns. It now yields unknown occurrence time.
+- Genuine empty reads finalized complete. Unrecognized, malformed and
+  denied output, the 4 MiB transport limit and the 128-entry parser limit
+  yielded explicit gaps and failed captures. Over-budget observations left
+  other accepted reports intact. The 64-report fixture exercised bounded
+  partial success. A report truncated at 8 KiB retained an excerpt-truncated
+  gap. SQLite tests exercised the existing 240 MiB stop and 256 MiB page
+  limits. History-only files were private and used schema 2 with no lifecycle
+  transitions, snapshot or resource samples, boot identity, or proven
+  process-instance attribution.
+- The default path made six ADB calls. Explicit user selection made five.
+  Source-call timeout and the 25-second acquisition deadline retained their
+  existing limits. A blocked fake-ADB read finalized failed in 3.033 s.
+  In a separate 64-report fixture, SIGINT was sent after the reader observed
+  nine committed reports. Ten reports remained replayable, the CLI printed
+  ten stored reports and the recording finalized interrupted in 193.6 ms
+  including acquisition and offline verification.
+- `go mod verify`, `go test ./...`, `go test -race ./...`, and
+  `go vet ./...` passed using Go 1.23.12. Matched fake-ADB captures against the
+  published v0.1.0 binary covered plain `watch`, `--resources`, and
+  `--summary`, each with duration-driven completion and SIGINT. Normalized
+  per-source observations matched, including a retained exit report. Both
+  binaries used 12 calls per plain or summary run and 13 per resource run.
+- The checksum-verified v0.1.0 release binary and the candidate produced
+  identical replay, investigation text/JSON, incident indexes and selected
+  detail JSON across schema 1–3 inputs, including both new history-only
+  recordings. Linux PTY smoke tests exercised incident and evidence
+  navigation, resizing, terminal restoration after keyboard or signal
+  exits, and `--last`. Offline tests used an unavailable ADB path and
+  preserved recording fingerprints.
+
+### Runtime evidence and measured cost
+
+Host ADB listed no devices at preflight. No physical phone was used. Only
+the approved disposable APK was installed and deliberately crashed on fresh
+emulators. Each case started with empty history and independently confirmed
+process exit, package UID, Android reason 4 and raw wall time before matching
+the persisted report. Both APK installs were removed. The temporary AVDs
+and downloaded API 30 image were removed after the gate.
+
+| Emulator image | Fingerprint | Post-exit runs | Completion p95 | Peak sampled host RSS | Recording size |
+| --- | --- | ---: | ---: | ---: | ---: |
+| API 30 AOSP x86-64 | `Android/sdk_phone_x86_64/generic_x86_64:11/RSR1.210722.013.A2/10067904:userdebug/test-keys` | 10 | 82.0 ms | 25,416 KiB | 12,288 bytes |
+| API 37 Google Play x86-64 | `google/sdk_gphone64_x86_64/emu64xa:17/CE2A.260420.051.A2/16418371:user/release-keys` | 10 | 115.4 ms | 23,272 KiB | 12,288 bytes |
+
+Nearest-rank p95 includes CLI startup, ADB subprocesses and finalization.
+RSS samples were taken about every 2 ms and exclude the shared ADB server
+and the emulator. Both runs passed the 10-second and 48 MiB targets. The
+shared exit-history parser was also benchmarked in baseline/candidate/
+candidate/baseline order with one API 37 entry and `GOMAXPROCS=1`. Median
+time moved from 129.3 to 133.3 microseconds over six samples each. Both
+versions allocated 9,016 bytes in 138 allocations per parse. This isolates
+host parser cost. No end-to-end live `watch` CPU estimate is implied.
+
+Runtime evidence for the new workflow covers these two emulator images.
+Older API 33/35/36 emulator and API 37 physical evidence relates to earlier
+capture milestones. Actual retention and OEM support vary. Package removal
+or a UID change can make older reports unavailable, and historical timezone
+changes cannot be recovered from the retrieval probe. Earlier repeated
+API 37 `am_crash` diagnostic gaps and finite-buffer logcat loss remain
+documented limitations.
+
+### Local release candidate
+
+The package target is Linux amd64 with `GOAMD64=v1` and CGO disabled. Run
+`scripts/package-release.sh NEW_OUTPUT_DIRECTORY` from two independent
+clean checkouts of the release commit with Go 1.23.12. Compare both archive
+and manifest bytes, run `sha256sum -c SHA256SUMS`, and verify archive
+permissions, source and Go metadata, and third-party notices. Follow the
+README install steps into an isolated prefix and exercise replay, text/JSON
+investigation and the TUI with ADB absent. Local runtime, benchmark, parity,
+and packaging logs are under ignored `.validation/v020-gate/`.
+
+**Verdict: GO for local v0.2.0 release candidate review.** Required gates use
+the emulator-validated scope above. Publication requires separate approval.

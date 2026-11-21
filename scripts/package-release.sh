@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Produce the Linux amd64 release candidate from a clean local commit.
+# Produce the Linux amd64 release archive from a clean local commit.
 set -euo pipefail
 umask 022
 export LC_ALL=C
@@ -20,7 +20,7 @@ if [[ -n $(git -C "$repo" status --porcelain) ]]; then
 fi
 revision=$(git -C "$repo" rev-parse HEAD)
 epoch=$(git -C "$repo" show -s --format=%ct "$revision")
-version=v0.1.0-rc1
+version=v0.2.0
 name="droidsleuth-$version-linux-amd64"
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT

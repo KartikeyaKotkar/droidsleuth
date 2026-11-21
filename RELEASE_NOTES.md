@@ -1,38 +1,61 @@
-# DroidSleuth v0.1.0-rc1
+# DroidSleuth v0.2.0
 
-DroidSleuth records Android main-process observations, scoped crash and ANR
-reports, available exit history, and diagnostic coverage gaps. The Linux CLI
-and terminal browser can inspect finalized SQLite recordings offline.
-`watch --summary` prints incident IDs and exact-file commands when capture ends.
-Optional resources include per-process CPU counters and approximate RSS.
+Use `collect-history` after an app has already exited. It saves available
+Android exit reports to a new schema-2 recording for offline investigation.
+The package must still be installed for the selected Android user.
 
-The release candidate fixes a reproduced API 37 failure where a busy merged
-numeric tail omitted a Java fatal stack still available in the crash buffer.
-Numeric polls now read a separate bounded crash tail in the existing ADB call.
-Process identity checks and incident uncertainty continue to apply. A
-disappearance records an observation with an unknown cause.
+```sh
+droidsleuth collect-history --out incident.db com.example.app
+droidsleuth investigate --timeline incident.db
+droidsleuth investigate --tui incident.db
+```
 
-## Supported and tested
+Missing or ambiguous device timezone data and unrepresentable dates leave
+the occurrence instant unknown. The recording preserves Android's raw time
+string. Unsupported or malformed history is reported as incomplete coverage.
+Android's reported reason and PID remain source claims with unproven
+historical process-instance attribution.
 
-- Binary target is Linux amd64. Source builds use Go 1.23 or later. Local
-  candidate archives use Go 1.23.12, with source and build details in
-  `BUILD_INFO`.
-- Live capture uses Android SDK Platform-Tools, an authorized Android API 30
-  or later device, and accessible process identity data. The release gate
-  exercised API 30 AOSP and API 37 Google Play emulators. Earlier validation
-  covered API 33, 35 and 36 emulators and one historical API 37 phone.
-- Offline replay and investigation accept schemas 1–3. Plain capture writes
-  schema 2, and `watch --resources` writes schema 3.
+## Install
 
-## Known limits
+Download `droidsleuth-v0.2.0-linux-amd64.tar.gz` and `SHA256SUMS` together.
 
-Android log buffers are finite. Filtered reads can miss events even when the
-read succeeds, and OEM diagnostic formats and access vary. Exit history may
-be missing or delayed. Android source reports can remain unbound to an exact
-kernel process instance. Secondary, custom-named, and isolated processes are
-outside main-process lifecycle tracking. Recording files and their exports
-can contain sensitive app diagnostics.
+```sh
+sha256sum -c SHA256SUMS
+tar -xzf droidsleuth-v0.2.0-linux-amd64.tar.gz
+install -Dm755 droidsleuth-v0.2.0-linux-amd64/droidsleuth "$HOME/.local/bin/droidsleuth"
+```
 
-See the README for installation, troubleshooting, and investigation. The
-repository's implementation record contains the release-gate evidence and
-performance measurements.
+The archive includes its commit, Go 1.23.12 build information, and dependency
+notices. To build from source, run `go build -o droidsleuth ./cmd/droidsleuth`
+with Go 1.23 or later.
+
+## Tested scope
+
+- Linux amd64. Collection uses Android SDK Platform-Tools and an authorized
+  device running Android 11/API 30 or later with accessible diagnostic sources.
+- The v0.2.0 post-exit workflow passed on API 30 AOSP and API 37 Google Play
+  x86-64 emulators. Earlier validation covered API 33, 35, and 36 emulators
+  and one historical API 37 phone. This gate had no physical phone.
+- Offline replay and investigation read schemas 1–3. Plain `watch` and
+  `collect-history` write schema 2. `watch --resources` writes schema 3.
+  Replay, text/JSON investigation, and the TUI were verified with ADB absent.
+
+## Known limitations
+
+- Retained history can expire or arrive late. Package removal and UID changes
+  can make earlier reports unavailable. OEM formats and permissions vary.
+  DroidSleuth reads the timezone at retrieval. It may differ from the
+  historical timezone.
+- Finite buffers and bounded filtered logcat reads can miss reports. The
+  API 37 PID-first `am_crash` event format remains unsupported. Earlier
+  release testing recorded repeated diagnostic gaps for that format. Exit
+  history may supply independent evidence when Android retains it.
+- Process disappearance alone leaves the cause unknown. Lifecycle tracking
+  covers the main process. Secondary, custom-named, and isolated processes
+  are outside its scope.
+- Recordings and exports can contain sensitive identifiers, timings, and
+  selected app diagnostics. Review them before sharing.
+
+See the README for workflows and troubleshooting and IMPLEMENTATION.md in the
+repository for validation evidence and measurements.
