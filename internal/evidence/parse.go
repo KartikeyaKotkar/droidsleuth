@@ -323,6 +323,12 @@ func ExitHistory(text string, meta session.Metadata, zone string) ([]session.Evi
 	if len(starts) > 128 {
 		return nil, fmt.Errorf("exit-history entry limit exceeded")
 	}
+	var location *time.Location
+	// Go resolves an empty name to UTC and "Local" to the host timezone.
+	// Neither value establishes the device's timezone.
+	if zone != "" && zone != "Local" {
+		location, _ = time.LoadLocation(zone)
+	}
 	var out []session.Evidence
 	for i, start := range starts {
 		end := len(text)
@@ -354,9 +360,9 @@ func ExitHistory(text string, meta session.Metadata, zone string) ([]session.Evi
 		}
 		rawTime := field(block, "timestamp")
 		var ns int64
-		if loc, err := time.LoadLocation(zone); err == nil {
-			if t, e := time.ParseInLocation("2006-01-02 15:04:05.000", rawTime, loc); e == nil {
-				ns = unambiguousLocalTime(t, rawTime, loc)
+		if location != nil {
+			if t, e := time.ParseInLocation("2006-01-02 15:04:05.000", rawTime, location); e == nil {
+				ns = unambiguousLocalTime(t, rawTime, location)
 			}
 		}
 		// Retrieval boot is deliberately absent: exit history can survive a reboot.

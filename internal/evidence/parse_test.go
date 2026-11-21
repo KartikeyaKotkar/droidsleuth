@@ -89,9 +89,11 @@ func TestExitHistoryTimeReasonsAndMissingSupport(t *testing.T) {
 	if err != nil || len(out) != 0 {
 		t.Fatal("wrong UID stored")
 	}
-	out, err = ExitHistory(history(4), target, "missing/timezone")
-	if err != nil || out[0].Events[0].DeviceTimeNS != 0 {
-		t.Fatal("unknown timezone invented a timestamp")
+	for _, zone := range []string{"missing/timezone", "", "Local"} {
+		out, err = ExitHistory(history(4), target, zone)
+		if err != nil || len(out) != 1 || out[0].Events[0].DeviceTimeNS != 0 || out[0].Events[0].RawTime == "" {
+			t.Fatalf("unknown device timezone %q changed occurrence evidence: %+v, %v", zone, out, err)
+		}
 	}
 }
 
