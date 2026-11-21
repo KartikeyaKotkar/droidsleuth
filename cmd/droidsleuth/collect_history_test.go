@@ -30,7 +30,13 @@ case "$5" in
     'cmd package list packages -U --user 0 com.example.app')
         echo package >> "$HISTORY_FIXTURE/calls"
         if [ "${HISTORY_MISSING:-}" != 1 ]; then echo 'package:com.example.app uid:10123'; fi;;
-    'getprop persist.sys.timezone') echo zone >> "$HISTORY_FIXTURE/calls"; echo "${HISTORY_ZONE:-UTC}";;
+    'cmd package list packages -U --user 10 com.example.app')
+        echo package10 >> "$HISTORY_FIXTURE/calls"
+        echo 'package:com.example.app uid:1010123';;
+    'getprop persist.sys.timezone')
+        echo zone >> "$HISTORY_FIXTURE/calls"
+        if [ "${HISTORY_ZONE_FAIL:-}" = 1 ]; then echo UTC; exit 1; fi
+        echo "${HISTORY_ZONE-UTC}";;
     'dumpsys activity exit-info com.example.app')
         echo history >> "$HISTORY_FIXTURE/calls"
         if [ "${HISTORY_BLOCK:-}" = 1 ]; then exec /bin/sleep 30; fi
@@ -57,10 +63,40 @@ func historyFixture(t *testing.T, raw string) string {
 	}
 	t.Setenv("PATH", dir)
 	t.Setenv("HISTORY_FIXTURE", dir)
-	for _, key := range []string{"HISTORY_MULTI", "HISTORY_MISSING", "HISTORY_ZONE", "HISTORY_BLOCK", "HISTORY_OVERFLOW"} {
+	for _, key := range []string{"HISTORY_MULTI", "HISTORY_MISSING", "HISTORY_ZONE_FAIL", "HISTORY_BLOCK", "HISTORY_OVERFLOW"} {
 		t.Setenv(key, "")
 	}
+	t.Setenv("HISTORY_ZONE", "UTC")
 	return dir
+}
+
+func TestCollectHistoryExplicitUserAndUnavailableTimezone(t *testing.T) {
+	const stamp = "2026-01-01 12:00:00.000"
+	dir := historyFixture(t, historyHeader+
+		historyEntry(0, 42, 1010123, "com.example.app", stamp, "selected")+
+		historyEntry(1, 43, 10123, "com.example.app", stamp, "owner user")+
+		historyEntry(2, 44, 1010123, "com.example.application", stamp, "prefix lookalike")+
+		historyEntry(3, 45, 1010123, "com.example.other", stamp, "shared UID"))
+	t.Setenv("TZ", "Pacific/Honolulu")
+	t.Setenv("HISTORY_ZONE_FAIL", "1")
+	path := filepath.Join(dir, "user10.db")
+	if err := run(context.Background(), []string{"collect-history", "--out", path, "--user", "10", "com.example.app"}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	calls, err := os.ReadFile(filepath.Join(dir, "calls"))
+	if err != nil || !slices.Equal(strings.Fields(string(calls)), []string{"devices", "sdk", "package10", "zone", "history"}) {
+		t.Fatalf("unexpected ADB calls: %q, %v", calls, err)
+	}
+	meta, rows := watchRecords(t, path)
+	if meta.User != 10 || meta.UID != 1010123 || meta.Status != "complete" || len(rows) != 3 {
+		t.Fatalf("unexpected history result: %+v, %+v", meta, rows)
+	}
+	evidence := rows[2].Evidence
+	event := evidence.Events[0]
+	if event.PID != 42 || event.RawTime != stamp || event.DeviceTimeNS != 0 || event.BootID != "" ||
+		strings.Contains(evidence.Text, "owner user") || strings.Contains(evidence.Text, "prefix lookalike") || strings.Contains(evidence.Text, "shared UID") {
+		t.Fatalf("unexpected retained evidence: %+v", evidence)
+	}
 }
 
 func TestCollectHistoryOfflineHandoff(t *testing.T) {
@@ -126,7 +162,9 @@ func TestCollectHistoryReadOutcomes(t *testing.T) {
 		{"empty", historyHeader, "", "complete", 0, false},
 		{"denied", "Permission Denial", "", "failed", 0, false},
 		{"unsupported", "Unknown command", "", "failed", 0, false},
+		{"unrecognized body", historyHeader + " Exit details are unavailable\n", "", "failed", 0, false},
 		{"malformed", historyHeader + strings.Replace(entry, "pid=42", "pid=bad", 1), "", "failed", 0, false},
+		{"parser entry limit", historyHeader + strings.Repeat(entry, 129), "", "failed", 0, false},
 		{"ambiguous time", historyHeader + entry, "America/New_York", "complete", 1, false},
 		{"output overflow", "", "", "failed", 0, true},
 	} {
@@ -250,6 +288,39 @@ func TestCollectHistoryEvidenceAndRecordingBounds(t *testing.T) {
 		t.Fatalf("bounds failed: status=%s rows=%d bytes=%d", meta.Status, len(rows), info.Size())
 	}
 	t.Logf("64 reports retained in %d bytes", info.Size())
+}
+
+func TestCollectHistoryTruncatedExcerptRecordsGap(t *testing.T) {
+	dir := historyFixture(t, historyHeader+
+		historyEntry(0, 42, 10123, "com.example.app", "2026-01-01 12:00:00.000", strings.Repeat("x", 10000)))
+	path := filepath.Join(dir, "history.db")
+	if err := run(context.Background(), []string{"collect-history", "--out", path, "com.example.app"}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	meta, rows := watchRecords(t, path)
+	if meta.Status != "complete" || len(rows) != 4 || rows[2].Evidence == nil ||
+		!rows[2].Evidence.Truncated || len(rows[2].Evidence.Text) != 8192 ||
+		rows[3].Kind != "gap" || !strings.Contains(rows[3].Error, "excerpt truncated") {
+		t.Fatalf("unexpected truncation result: %+v, %+v", meta, rows)
+	}
+}
+
+func TestCollectHistoryOversizedObservationPreservesAnotherReport(t *testing.T) {
+	dir := historyFixture(t, historyHeader+
+		historyEntry(0, 42, 10123, "com.example.app", strings.Repeat("x", 64<<10), "over budget")+
+		historyEntry(1, 43, 10123, "com.example.app", "2026-01-01 12:00:00.000", "retained"))
+	path := filepath.Join(dir, "history.db")
+	var out bytes.Buffer
+	err := run(context.Background(), []string{"collect-history", "--out", path, "com.example.app"}, &out, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "observation budget") ||
+		!strings.Contains(out.String(), "Stored 1 Android exit report(s)") {
+		t.Fatalf("unexpected partial result: %v, %q", err, &out)
+	}
+	meta, rows := watchRecords(t, path)
+	if meta.Status != "failed" || len(rows) != 4 || rows[1].SourceStatus.ReadSucceeded ||
+		rows[1].SourceStatus.SelectedObservations != 1 || rows[2].Kind != "gap" || rows[3].Evidence.Events[0].PID != 43 {
+		t.Fatalf("unexpected partial recording: %+v, %+v", meta, rows)
+	}
 }
 
 func TestCollectHistoryDeadlineFinalizes(t *testing.T) {

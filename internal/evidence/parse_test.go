@@ -112,6 +112,88 @@ func TestAmbiguousExitHistoryWallTime(t *testing.T) {
 	}
 }
 
+func TestExitHistoryDeviceZoneIsIndependentOfHostZone(t *testing.T) {
+	const original = "2023-11-14 22:13:20.123"
+	const springGap = "2023-03-12 02:30:00.123"
+	for _, hostZone := range []string{"UTC", "Pacific/Honolulu"} {
+		t.Setenv("TZ", hostZone)
+		for _, tc := range []struct {
+			stamp string
+			want  int64
+		}{
+			{original, 1700018000123000000}, // 03:13:20.123 UTC the next day
+			{springGap, 0},
+		} {
+			raw := strings.Replace(history(4), original, tc.stamp, 1)
+			out, err := ExitHistory(raw, target, "America/New_York")
+			if err != nil || len(out) != 1 {
+				t.Fatalf("expected retained report, got %+v, %v", out, err)
+			}
+			if event := out[0].Events[0]; event.RawTime != tc.stamp || event.DeviceTimeNS != tc.want {
+				t.Fatalf("host TZ %s: expected occurrence %d, got %+v", hostZone, tc.want, event)
+			}
+		}
+	}
+}
+
+func TestExitHistoryRejectsUnrepresentableOccurrenceTimes(t *testing.T) {
+	for _, stamp := range []string{
+		"1677-09-21 00:12:43.145",
+		"2262-04-11 23:47:16.855",
+		"2500-01-01 00:00:00.000",
+		"2023-02-29 00:00:00.000",
+	} {
+		t.Run(stamp, func(t *testing.T) {
+			raw := strings.Replace(history(4), "2023-11-14 22:13:20.123", stamp, 1)
+			out, err := ExitHistory(raw, target, "UTC")
+			if err != nil || len(out) != 1 {
+				t.Fatalf("expected retained report, got %+v, %v", out, err)
+			}
+			event := out[0].Events[0]
+			if event.RawTime != stamp || event.DeviceTimeNS != 0 {
+				t.Fatalf("expected unknown occurrence time, got %+v", event)
+			}
+		})
+	}
+}
+
+func TestExitHistoryDoesNotAcceptUnrecognizedBodyAsEmpty(t *testing.T) {
+	const heading = "ACTIVITY MANAGER PROCESS EXIT INFO (dumpsys activity exit-info)\n"
+	for _, body := range []string{
+		" ApplicationExitInfo #?:\n timestamp=2023-11-14 22:13:20.123\n",
+		" Exit details are unavailable\n",
+	} {
+		if _, err := ExitHistory(heading+body, target, "UTC"); err == nil {
+			t.Fatalf("unrecognized history appeared empty: %q", body)
+		}
+	}
+}
+
+func TestExitHistoryDoesNotIncludeUnrecognizedEntryInExcerpt(t *testing.T) {
+	raw := history(4) + " ApplicationExitInfo #?:\n process=com.private.other privacy-sentinel\n"
+	reports, err := ExitHistory(raw, target, "UTC")
+	if err == nil {
+		t.Fatal("malformed history appeared complete")
+	}
+	for _, report := range reports {
+		if strings.Contains(report.Text, "privacy-sentinel") {
+			t.Fatal("unrecognized entry was appended to selected evidence")
+		}
+	}
+}
+
+func TestExitHistoryExcerptStopsAtNextPackageSection(t *testing.T) {
+	raw := history(4) + "  package: com.private.other\n    Historical Process Exit for uid=10123\n"
+	raw += strings.Replace(strings.SplitN(history(4), "\n", 2)[1], "process=com.example.app", "process=com.private.other", 1)
+	out, err := ExitHistory(raw, target, "UTC")
+	if err != nil || len(out) != 1 {
+		t.Fatalf("expected only the selected report, got %+v, %v", out, err)
+	}
+	if strings.Contains(out[0].Text, "com.private.other") {
+		t.Fatalf("excerpt included a different package: %q", out[0].Text)
+	}
+}
+
 func TestContradictoryProcessBlockIsNotPersisted(t *testing.T) {
 	raw := java("10123", 42, target.Package) + "\n" + logline("10123", 42, "AndroidRuntime", "Process: com.private.other, PID: 42") + "\n" + logline("10123", 42, "AndroidRuntime", "Process: com.example.app, PID: 42")
 	out, bad := Logcat(raw, target, "boot")

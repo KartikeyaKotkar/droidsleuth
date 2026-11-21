@@ -4,6 +4,7 @@ package evidence
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -285,7 +286,9 @@ func Logcat(text string, meta session.Metadata, boot string) ([]session.Evidence
 	return result, malformed
 }
 
-var exitStart = regexp.MustCompile(`(?m)^\s*ApplicationExitInfo #\d+:?`)
+var exitStart = regexp.MustCompile(`(?m)^[ \t]*ApplicationExitInfo #[0-9]+:?[ \t\r]*$`)
+var exitEntry = regexp.MustCompile(`(?m)^[ \t]*ApplicationExitInfo\b[^\n]*`)
+var exitGroup = regexp.MustCompile(`(?m)^[ \t]*(?:package:|Historical Process Exit for uid=)`)
 var fields = regexp.MustCompile(`(?:^|\s)([A-Za-z]+)=`)
 
 func field(block, key string) string {
@@ -316,12 +319,30 @@ func ExitHistory(text string, meta session.Metadata, zone string) ([]session.Evi
 	if !utf8.ValidString(text) {
 		return nil, fmt.Errorf("exit-history source has invalid UTF-8")
 	}
-	if !strings.Contains(text, "ACTIVITY MANAGER PROCESS EXIT INFO") || strings.Contains(text, "Permission Denial") {
+	text = strings.TrimSpace(text)
+	heading, body, _ := strings.Cut(text, "\n")
+	heading = strings.TrimSpace(heading)
+	const expectedHeading = "ACTIVITY MANAGER PROCESS EXIT INFO"
+	if (heading != expectedHeading && heading != expectedHeading+" (dumpsys activity exit-info)") || strings.Contains(text, "Permission Denial") {
 		return nil, fmt.Errorf("exit-history unavailable or unrecognized")
 	}
-	starts := exitStart.FindAllStringIndex(text, -1)
+	starts := exitEntry.FindAllStringIndex(text, 129)
 	if len(starts) > 128 {
 		return nil, fmt.Errorf("exit-history entry limit exceeded")
+	}
+	for _, start := range starts {
+		if !exitStart.MatchString(text[start[0]:start[1]]) {
+			return nil, fmt.Errorf("unrecognized exit-history entry header")
+		}
+	}
+	if len(starts) == 0 {
+		// A supported empty AOSP dump contains only the heading and optional
+		// persistence timestamp. In particular, an OEM error is not an empty ring.
+		body = strings.TrimSpace(body)
+		if body != "" && (!strings.HasPrefix(body, "Last Timestamp of Persistence Into Persistent Storage: ") || strings.Contains(body, "\n")) {
+			return nil, fmt.Errorf("unrecognized exit-history layout")
+		}
+		return nil, nil
 	}
 	var location *time.Location
 	// Go resolves an empty name to UTC and "Local" to the host timezone.
@@ -336,6 +357,9 @@ func ExitHistory(text string, meta session.Metadata, zone string) ([]session.Evi
 			end = starts[i+1][0]
 		}
 		block := text[start[0]:end]
+		if next := exitGroup.FindStringIndex(block); next != nil {
+			block = block[:next[0]]
+		}
 		name := field(block, "process")
 		if name == "" {
 			name = field(block, "processName")
@@ -368,10 +392,6 @@ func ExitHistory(text string, meta session.Metadata, zone string) ([]session.Evi
 		// Retrieval boot is deliberately absent: exit history can survive a reboot.
 		out = append(out, observation("activity-exit-info", strings.TrimSpace(block), session.Event{Kind: "exit_report", Process: name, PID: pid, UID: &uid, DeviceTimeNS: ns, TimeUncertaintyNS: int64(time.Millisecond), RawTime: rawTime, Reason: &reason, Detail: field(block, "reason")}))
 	}
-	// A nonempty unrecognized layout must not masquerade as a supported empty ring.
-	if len(starts) == 0 && strings.Contains(text, "reason=") {
-		return nil, fmt.Errorf("unrecognized exit-history layout")
-	}
 	return out, nil
 }
 
@@ -393,8 +413,11 @@ func unambiguousLocalTime(t time.Time, raw string, loc *time.Location) int64 {
 	for offset := range offsets {
 		candidate := wall.Add(-time.Duration(offset) * time.Second)
 		if candidate.In(loc).Format(layout) == raw {
-			result = candidate.UnixNano()
 			matches++
+			// UnixNano is undefined outside the signed nanosecond range.
+			if !candidate.Before(time.Unix(0, math.MinInt64)) && !candidate.After(time.Unix(0, math.MaxInt64)) {
+				result = candidate.UnixNano()
+			}
 		}
 	}
 	if matches != 1 {
