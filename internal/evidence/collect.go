@@ -63,37 +63,9 @@ func Start(ctx context.Context, s shell, meta session.Metadata) (<-chan session.
 				var issue string
 				if source == "logcat" {
 					observations, issue = readLogcat(ctx, s, meta, &previous)
+					observations, issue = boundObservations(observations, issue)
 				} else {
-					zone, ze := s.Shell(ctx, "getprop persist.sys.timezone")
-					raw, err := s.Shell(ctx, "dumpsys activity exit-info "+meta.Package)
-					if err != nil {
-						issue = "exit-history read failed or disconnected"
-					} else {
-						if ze != nil {
-							zone = ""
-						}
-						observations, err = ExitHistory(raw, meta, strings.TrimSpace(zone))
-						if err != nil {
-							issue = err.Error()
-						}
-					}
-				}
-				// Reserve room for the writer's sequence and collection-time envelope.
-				// Oversized normalized fields must not turn source damage into
-				// a fatal SQLite writer error for the whole capture.
-				bounded := observations[:0]
-				for _, o := range observations {
-					body, encodeErr := json.Marshal(o)
-					if encodeErr != nil || len(body) > 60<<10 {
-						issue = "normalized evidence exceeds observation budget; coverage incomplete"
-						continue
-					}
-					bounded = append(bounded, o)
-				}
-				observations = bounded
-				if len(observations) > 64 {
-					observations = observations[:64]
-					issue = "selected diagnostic observation limit exceeded; coverage incomplete"
+					observations, issue = ReadExitHistory(ctx, s, meta)
 				}
 				if !emit(session.Record{Kind: "source_status", SourceStatus: &session.SourceStatus{ReadSucceeded: issue == "", SelectedObservations: len(observations)}, StartedUTC: begin, EndedUTC: time.Now()}) {
 					return
@@ -233,4 +205,40 @@ func readLogcat(ctx context.Context, s shell, meta session.Metadata, previous *s
 	}
 	*previous = marker
 	return observations, issue
+}
+
+// ReadExitHistory retrieves one bounded batch for a previously validated target.
+// A timezone failure leaves occurrence time unknown while retaining the report.
+func ReadExitHistory(ctx context.Context, s shell, meta session.Metadata) ([]session.Evidence, string) {
+	zone, zoneErr := s.Shell(ctx, "getprop persist.sys.timezone")
+	raw, err := s.Shell(ctx, "dumpsys activity exit-info "+meta.Package)
+	if err != nil {
+		return nil, "exit-history read failed or disconnected"
+	}
+	if zoneErr != nil {
+		zone = ""
+	}
+	observations, err := ExitHistory(raw, meta, strings.TrimSpace(zone))
+	if err != nil {
+		return nil, err.Error()
+	}
+	return boundObservations(observations, "")
+}
+
+func boundObservations(observations []session.Evidence, issue string) ([]session.Evidence, string) {
+	// Reserve room for the writer's sequence and collection-time envelope.
+	bounded := observations[:0]
+	for _, observation := range observations {
+		body, err := json.Marshal(observation)
+		if err != nil || len(body) > 60<<10 {
+			issue = "normalized evidence exceeds observation budget; coverage incomplete"
+			continue
+		}
+		bounded = append(bounded, observation)
+	}
+	if len(bounded) > 64 {
+		bounded = bounded[:64]
+		issue = "selected diagnostic observation limit exceeded; coverage incomplete"
+	}
+	return bounded, issue
 }

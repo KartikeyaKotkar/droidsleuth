@@ -1777,3 +1777,79 @@ license, dependency notices, release notes, and source and toolchain
 metadata. It uses normalized archive ordering, ownership, modes, and
 timestamps. Local build logs and artifacts are kept under ignored
 `.validation/v01`.
+
+## v0.2 retained exit-history collection
+
+`collect-history --out FILE [--device SERIAL] [--user ID] PACKAGE` takes one
+package-scoped Android exit-history reading. The command uses the existing
+device, SDK, user, and package UID probes and shares the timezone and history
+read with `watch`. It requires the package to be installed for the selected
+user. The output path is explicit and the store reserves it exclusively.
+
+The command writes schema 2. Its scope row identifies retained history and
+the lack of live process, resource, and logcat observations. A source-status
+row records the read outcome, followed by any diagnostic gaps and verified
+reports. Host bounds describe retrieval. Android occurrence times and
+reported reasons remain source claims. Exit reports retain no boot ID or
+proven process instance and generate no lifecycle transitions.
+
+A supported empty result finalizes as `complete`. Source failures and limits
+return a nonzero exit status and preserve diagnostic gaps and any accepted
+reports. An interrupted collection keeps its committed observations and
+finalizes as `interrupted`. The CLI prints the path, count, and an explicit
+timeline command whenever it can open the writer. Existing SQLite size and
+privacy rules apply. The command uses a 25-second acquisition deadline and
+bounded writes and finalization.
+
+The shared parser previously resolved an empty device timezone as UTC because
+of Go's `time.LoadLocation` behavior. A reproducing test also checks that
+`Local` does not resolve against the host timezone. Missing, invalid, host-local,
+or ambiguous timezone data keeps the raw date string and leaves occurrence
+time unknown. This applies to new exit-history observations in both commands.
+
+### Verification
+
+- Fake ADB verifies six calls with default user selection, with no snapshot or
+  logcat commands. Tests cover package and UID filtering, multiple devices,
+  missing packages, exclusive output, malformed and denied history, an
+  unsupported source, a 4 MiB output overflow, ambiguous wall time,
+  cancellation, and deadline expiry.
+- A 128-entry fixture with large escaped excerpts retained 64 reports in a
+  3,158,016-byte finalized recording. The capture recorded the observation
+  limit as a diagnostic gap and returned nonzero.
+- API 30 AOSP and API 37 Google Play x86-64 disposable emulator runs first
+  checked that a fresh fixture returned empty history. Each run then launched
+  the fixture in its controlled Java fatal mode. Independent scoped ADB reads
+  confirmed the PID had exited and Android retained reason 4 before the first
+  post-exit collection. No live DroidSleuth recorder was running.
+- Ten post-exit collections per API retained the matching report. Offline
+  investigation, with ADB absent, returned the verified evidence range and
+  an unbound instance. Repeated JSON and database hashes stayed the same.
+  Both APIs passed the Linux TUI PTY smoke test for evidence navigation and
+  terminal restoration.
+- Replay and investigation output for identical schema 1–3 inputs matched
+  the published v0.1.0 executable byte for byte. Matched fake-ADB `watch`
+  captures issued the same call counts and retained equal per-source
+  observations after normalizing host timestamps and sequence numbers.
+- Go 1.23.12 passed `go mod verify`, `go test ./...`, `go test -race ./...`,
+  and `go vet ./...`.
+
+### Measured cost
+
+The ten one-shot runs per API used the same retained fixture exit. Timing
+included CLI startup, all ADB calls, database finalization, and CLI output.
+The table reports nearest-rank p95 and peak host process-tree RSS sampled
+about every 2 ms. The shared ADB server is outside the measured process
+tree. Short peaks can escape sampling.
+
+| Emulator | Runs | Completion p95 | Peak host RSS | Recording size |
+| --- | ---: | ---: | ---: | ---: |
+| API 30 AOSP x86-64 | 10 | 116.3 ms | 25,204 KiB | 12,288 bytes |
+| API 37 Google Play x86-64 | 10 | 210.9 ms | 18,700 KiB | 12,288 bytes |
+
+Both runs passed the 10-second and 48 MiB targets. Live `watch` overhead
+was not remeasured. The matched fixture confirmed its ADB call counts,
+and the shared read uses the same shell commands and bounds. The
+runtime proof is emulator-only. OEM permissions, retention, package
+removal, and UID changes can limit available history. Local artifacts
+are under ignored `.validation/v02`.

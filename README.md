@@ -11,17 +11,17 @@ reports and candidate process associations carry their own uncertainty.
 
 ## Install on Linux amd64
 
-From the directory containing the release archive and its `SHA256SUMS` file:
+Download the archive and `SHA256SUMS` from the [v0.1.0 release](https://github.com/KartikeyaKotkar/droidsleuth/releases/tag/v0.1.0).
 
 ```sh
 sha256sum -c SHA256SUMS
-tar -xzf droidsleuth-v0.1.0-rc1-linux-amd64.tar.gz
-install -Dm755 droidsleuth-v0.1.0-rc1-linux-amd64/droidsleuth "$HOME/.local/bin/droidsleuth"
+tar -xzf droidsleuth-v0.1.0-linux-amd64.tar.gz
+install -Dm755 droidsleuth-v0.1.0-linux-amd64/droidsleuth "$HOME/.local/bin/droidsleuth"
 ```
 
 Add `$HOME/.local/bin` to PATH or invoke the installed binary by its full path.
 The archive includes its source revision, toolchain, and dependency notices.
-See [release notes](RELEASE_NOTES.md) for the tested platforms and limitations.
+Build the current checkout to use `collect-history`.
 
 ## Build and capture
 
@@ -77,6 +77,31 @@ If summary generation fails after finalization, the error identifies the saved
 file. Use explicit-file investigation to retry. Printed commands use POSIX
 shell quoting for ordinary paths and Bash or Zsh quoting for paths containing
 control characters or invalid UTF-8.
+
+## Collect exit history after an incident
+
+If the app has already exited, use a build from this checkout to save Android's
+retained exit reports. The package must still be installed for the selected
+Android user.
+
+```sh
+./droidsleuth collect-history --out incident.db com.example.app
+./droidsleuth investigate --timeline incident.db
+./droidsleuth investigate --tui incident.db
+```
+
+Use a new output path. `--device SERIAL` and `--user ID` select the target
+when needed. The command performs one package-scoped history read. The
+recording describes what Android reported and when DroidSleuth retrieved it.
+It contains no live process samples, CPU/RSS measurements, or logcat stack
+excerpts. Android's reported reason and occurrence time can be examined
+offline. Exact process instance association remains unproven.
+
+An empty successful read means Android returned no matching retained reports.
+Retention limits, package removal, and UID changes can affect availability.
+If the source is denied, unsupported, or damaged, the command exits nonzero.
+When a recording was created, use the printed path to inspect any retained
+reports and coverage gaps.
 
 ## Investigate offline
 

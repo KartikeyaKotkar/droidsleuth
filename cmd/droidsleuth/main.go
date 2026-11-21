@@ -29,7 +29,7 @@ func main() {
 
 func run(ctx context.Context, args []string, out, diagnostic io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: droidsleuth devices | watch [flags] PACKAGE | replay [--json] FILE | investigate [--json] [--timeline | --tui] (FILE | --last)")
+		return errors.New("usage: droidsleuth devices | watch [flags] PACKAGE | collect-history --out FILE PACKAGE | replay [--json] FILE | investigate [--json] [--timeline | --tui] (FILE | --last)")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(diagnostic)
@@ -57,19 +57,10 @@ func run(ctx context.Context, args []string, out, diagnostic io.Writer) error {
 		if flags.NArg() != 1 || !capture.ValidPackage(flags.Arg(0)) || *user < -1 || *duration < 0 {
 			return errors.New("usage: droidsleuth watch [--device SERIAL] [--user ID] [--out FILE] [--duration 10s] [--resources] [--summary] PACKAGE; flags precede PACKAGE")
 		}
-		devices, err := client.Devices(ctx)
+		meta, err := probeTarget(ctx, &client, *serial, flags.Arg(0), *user)
 		if err != nil {
 			return err
 		}
-		client.Serial, err = adb.Select(devices, *serial)
-		if err != nil {
-			return err
-		}
-		meta, err := capture.Probe(ctx, client, flags.Arg(0), *user)
-		if err != nil {
-			return err
-		}
-		meta.Serial = client.Serial
 		// Verify the mandatory data sources before creating a recording.
 		command, err := capture.SnapshotCommand(meta.Package, meta.UID)
 		if err != nil {
@@ -115,6 +106,8 @@ func run(ctx context.Context, args []string, out, diagnostic io.Writer) error {
 			return fmt.Errorf("recording finalized at %q; summary failed: %w", options.Path, err)
 		}
 		return nil
+	case "collect-history":
+		return runCollectHistory(ctx, flags, args[1:], out)
 	case "investigate":
 		return runInvestigate(ctx, flags, args[1:], out, diagnostic)
 	case "replay":
@@ -146,6 +139,20 @@ func run(ctx context.Context, args []string, out, diagnostic io.Writer) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func probeTarget(ctx context.Context, client *adb.Client, serial, pkg string, user int) (session.Metadata, error) {
+	devices, err := client.Devices(ctx)
+	if err != nil {
+		return session.Metadata{}, err
+	}
+	client.Serial, err = adb.Select(devices, serial)
+	if err != nil {
+		return session.Metadata{}, err
+	}
+	meta, err := capture.Probe(ctx, *client, pkg, user)
+	meta.Serial = client.Serial
+	return meta, err
 }
 
 func defaultPath() (string, error) {
