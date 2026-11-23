@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 func TestReadEvidenceVerifiesExactReference(t *testing.T) {

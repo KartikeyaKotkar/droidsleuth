@@ -87,6 +87,18 @@ install -Dm755 droidsleuth-v0.2.0-linux-amd64/droidsleuth "$HOME/.local/bin/droi
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
+### Install the development build with Go
+
+On Linux with Go 1.23 or newer:
+
+```sh
+go install github.com/KartikeyaKotkar/droidsleuth/cmd/droidsleuth@main
+```
+
+Go installs the binary into `GOBIN` if set, or `$(go env GOPATH)/bin` by
+default. Add that directory to PATH. The published v0.2.0 binary is available
+through the release download above.
+
 ## Investigate from the terminal
 
 ```sh

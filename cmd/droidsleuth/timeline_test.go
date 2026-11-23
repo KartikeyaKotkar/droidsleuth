@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 func TestInvestigateTimelineCLI(t *testing.T) {

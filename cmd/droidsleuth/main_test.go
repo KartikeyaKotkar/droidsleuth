@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 func TestReplayHasNoADBDependency(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 func fixture(t *testing.T, name string) string {

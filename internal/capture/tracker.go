@@ -1,6 +1,6 @@
 package capture
 
-import "droidsleuth/internal/session"
+import "github.com/KartikeyaKotkar/droidsleuth/internal/session"
 
 // Tracker only consumes complete snapshots. Gaps never manufacture disappearance.
 type Tracker struct {

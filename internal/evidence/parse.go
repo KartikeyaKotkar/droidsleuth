@@ -11,7 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 const TextLimit = 8192

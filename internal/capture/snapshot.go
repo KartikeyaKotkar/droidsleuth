@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 // Shell is the subprocess boundary used by the collector and its fixtures.

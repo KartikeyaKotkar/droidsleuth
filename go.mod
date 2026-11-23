@@ -1,4 +1,4 @@
-module droidsleuth
+module github.com/KartikeyaKotkar/droidsleuth
 
 go 1.23.0
 

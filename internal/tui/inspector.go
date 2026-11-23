@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"droidsleuth/internal/investigate"
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/investigate"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 
 	"github.com/charmbracelet/x/ansi"
 )

@@ -4,7 +4,7 @@ import (
 	"math"
 	"time"
 
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 // ResourceObservation includes the measured inputs and any derived values.

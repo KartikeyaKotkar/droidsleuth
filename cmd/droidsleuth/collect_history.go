@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"droidsleuth/internal/adb"
-	"droidsleuth/internal/capture"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/adb"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/capture"
 )
 
 func runCollectHistory(ctx context.Context, flags *flag.FlagSet, args []string, out io.Writer) error {

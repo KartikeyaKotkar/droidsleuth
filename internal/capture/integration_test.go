@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"droidsleuth/internal/adb"
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/adb"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 func fakeClient(t *testing.T, files map[string]string) adb.Client {

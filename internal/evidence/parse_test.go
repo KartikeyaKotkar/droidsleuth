@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 var target = session.Metadata{Package: "com.example.app", UID: 10123, User: 0}

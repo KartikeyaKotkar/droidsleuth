@@ -10,9 +10,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"droidsleuth/internal/investigate"
-	"droidsleuth/internal/session"
-	"droidsleuth/internal/tui"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/investigate"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/tui"
 )
 
 func runInvestigate(ctx context.Context, flags *flag.FlagSet, args []string, out, diagnostic io.Writer) error {

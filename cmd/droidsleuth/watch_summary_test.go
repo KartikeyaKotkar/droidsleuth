@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 const watchFixtureADB = `#!/bin/sh

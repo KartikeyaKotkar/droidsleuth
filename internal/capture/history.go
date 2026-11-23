@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"droidsleuth/internal/evidence"
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/evidence"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 // CollectHistory saves retained exit reports for a previously probed target.

@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	"droidsleuth/internal/evidence"
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/evidence"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 type Options struct {

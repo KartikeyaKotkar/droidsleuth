@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 func TestOfflineReuseContradictionsAndDeterminism(t *testing.T) {

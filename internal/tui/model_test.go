@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"droidsleuth/internal/investigate"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/investigate"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"sort"
 
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 const limit = 4096

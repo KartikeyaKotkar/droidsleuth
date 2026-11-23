@@ -6,7 +6,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 func FuzzDiagnosticParsers(f *testing.F) {

@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"droidsleuth/internal/adb"
-	"droidsleuth/internal/investigate"
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/adb"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/investigate"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 // Opt-in wall-clock soak. Normal tests remain fast; accelerated event fixtures

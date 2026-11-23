@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"time"
 
-	"droidsleuth/internal/adb"
-	"droidsleuth/internal/capture"
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/adb"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/capture"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 func main() {

@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 const LogcatCommand = `logcat -d -t 512 -v threadtime -v epoch -v uid -v usec -b main -b crash -b system -b events 'AndroidRuntime:E' 'DEBUG:F' 'am_crash:I' 'am_anr:I' '*:S'`

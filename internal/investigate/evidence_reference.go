@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 // EvidenceSlice is the exact stored line range of a normalized report.

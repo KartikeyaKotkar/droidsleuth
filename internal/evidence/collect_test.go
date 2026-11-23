@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"droidsleuth/internal/adb"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/adb"
 )
 
 func TestFakeADBCollectorsCancellationAndMissingHistory(t *testing.T) {

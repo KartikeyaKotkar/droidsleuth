@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"droidsleuth/internal/session"
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
 
 func resourceRow(seq int64, at time.Duration, id session.Identity, user, system, pages uint64) session.Record {
