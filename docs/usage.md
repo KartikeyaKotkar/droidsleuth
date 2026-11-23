@@ -8,7 +8,8 @@ commands below use an installed `droidsleuth` binary on PATH.
 `droidsleuth devices` lists ADB targets and their states. If multiple devices
 are attached, pass `--device SERIAL` to `watch` or `collect-history`. Both commands
 default to the current Android user. Use `--user ID` to select another installed
-copy of the package. Flags precede positional arguments.
+copy of the package. For a debug build or product flavor, use the application ID
+of the installed variant. Flags precede positional arguments.
 
 ## Post-exit collection
 
@@ -30,6 +31,8 @@ from the zone at the incident.
 snapshot. A successful snapshot can show the process absent. Stop with
 Ctrl+C or SIGTERM, or set `--duration`. The summary lists up to five of
 the newest indexed incident anchors and commands for the exact recording.
+Reports can predate the capture. The index orders them by when DroidSleuth
+collected them. Open a report to see its device occurrence time, if available.
 When there are no anchors, use the printed replay command to inspect stored
 observations and coverage. A post-finalization summary error includes the
 recording path so you can open it directly.
@@ -66,7 +69,7 @@ recording in the managed directory. Use the explicit path for custom files.
 
 Use a terminal with at least 40 columns and 10 rows. For redirected output,
 use `--timeline`. The TUI verifies evidence references against their stored
-rows and displays captured truncation. Reopen the browser if the file changes.
+rows and displays captured truncation. Quit and reopen the TUI if the file changes.
 
 Replay JSON emits a metadata object followed by stored observations.
 `collect-history` and plain `watch` write schema 2. `watch --resources` writes
@@ -80,8 +83,10 @@ and can include shared pages. Either metric can be unavailable independently.
 
 ## Troubleshooting
 
-- **ADB missing or unauthorized.** Put Android SDK Platform-Tools on PATH,
-  unlock the device, and accept the debugging prompt.
+- **No device listed.** Run `adb devices -l`. For USB, check the data cable
+  and that USB debugging is enabled. An `unauthorized` row means the device
+  is visible. Unlock it and accept the debugging prompt for your computer.
+  If the shell cannot find `adb`, put Android SDK Platform-Tools on PATH.
 - **Package or snapshot probe failed.** Verify the package is installed for
   the selected user. Check the API level and available process sources.
 - **Expected crash or ANR absent.** Inspect recorded gaps with replay.
@@ -107,3 +112,8 @@ SIM Toolkit provided a successful empty-history case. A two-minute Settings
 recording captured 99 process snapshots with CPU and RSS and no snapshot
 gaps. One logcat poll reported incomplete coverage. History and live
 recordings passed offline text, JSON, and TUI checks.
+
+The [development checkout review](../IMPLEMENTATION.md#development-checkout-onboarding-review)
+repeated both workflows on the same phone and compared the new recordings
+with independent ADB reads. The emulator and phone runs cover specific builds.
+Available history, log formats and shell permissions can differ on another device.

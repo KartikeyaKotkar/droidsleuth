@@ -1,23 +1,24 @@
 # DroidSleuth
 
-**Investigate Android app exits, crashes, and hangs from your Linux terminal.**
+**Investigate an Android app exit from your Linux terminal, even after the process is gone.**
 
-An app disappears before you attach a debugger. By the time you check logcat,
-the relevant lines may have rolled out of the buffer. DroidSleuth can retrieve
-the exit history Android still retains or record a reproduction as it happens.
-It saves the evidence in a local SQLite file you can inspect offline.
+When an app disappears during testing, retrieve the exit reports Android still
+has. If you can reproduce the problem, record the main process, crash and ANR
+reports, and optional CPU/RSS together. Open one local SQLite file offline
+to see what was observed, read the supporting lines, and find gaps in coverage.
 
 ![Terminal recording showing the incident index, timeline, and stored evidence for a disposable app](assets/incident-demo.gif)
 
-*The updated TUI shows the selected incident’s position, host collection time,
-and attribution uncertainty. Captured offline from a sanitized API 37 emulator
-recording of a disposable test app.* [Demo provenance](assets/README.md)
+*Development build (`main`). Follow one real Android exit report from the
+incident index to its stored source lines. The recording comes from a disposable
+app on an API 37 emulator and has been sanitized.* [Demo provenance](assets/README.md)
 
 ## Choose a workflow
 
-Install v0.2.0 below, then run `droidsleuth devices` to check that your Android
-device appears with state `device`. Replace `com.example.app` with your package
-name and use a fresh output filename.
+[Install v0.2.0](#install-v020), connect an authorized Android device, and run
+`droidsleuth devices`. Look for state `device`. Replace `com.example.app`
+below with your installed app's application ID and use a fresh output filename.
+If several devices are connected, add `--device SERIAL` before the package name.
 
 ### The incident already happened
 
@@ -29,8 +30,8 @@ droidsleuth collect-history --out incident.db com.example.app
 droidsleuth investigate --tui incident.db
 ```
 
-The recording contains reported exit reasons and available timestamps. An
-empty result means the read returned no matching retained reports. See
+The recording contains Android's reported reasons and available timestamps.
+A successful empty read means Android returned no matching retained report. See
 [the usage guide](docs/usage.md#post-exit-collection) for source failures and
 partial results.
 
@@ -70,11 +71,10 @@ droidsleuth investigate --tui repro.db
   Platform-Tools (`adb` on PATH), and an authorized ADB connection. Live
   process tracking requires readable process identity sources. No root or
   companion app is required.
-- **Validation:** The v0.2.0 release gate exercised post-exit collection on
-  API 30 AOSP and API 37 Google Play x86-64 emulators. Subsequent testing on a
-  Motorola Edge 70 Fusion (API 37) verified exit history, live sampling with
-  CPU/RSS, and offline investigation. One logcat poll reported incomplete
-  coverage. [Validation scope](docs/usage.md#validation-scope)
+- **Tested targets:** The v0.2.0 post-exit release gate used API 30 and 37
+  emulators. Subsequent read-only tests exercised exit history, live CPU/RSS
+  and offline investigation on one Motorola Edge 70 Fusion (API 37).
+  [Validation scope](docs/usage.md#validation-scope)
 
 ## Install v0.2.0
 
@@ -96,9 +96,11 @@ On Linux with Go 1.23 or newer:
 go install github.com/KartikeyaKotkar/droidsleuth/cmd/droidsleuth@main
 ```
 
-Go installs the binary into `GOBIN` if set, or `$(go env GOPATH)/bin` by
-default. Add that directory to PATH. The published v0.2.0 binary is available
-through the release download above.
+Go installs the binary into `GOBIN` if set, or the first `GOPATH` entry's
+`bin` directory by default. Add that directory to PATH. `@main` follows
+development and includes the TUI shown above. For a pinned install, use the
+checksummed release archive. The tagged v0.2.0 source predates the GitHub
+module path.
 
 ## Investigate from the terminal
 
@@ -112,8 +114,8 @@ In the TUI, use **↑/↓** or **j/k** to move, **Enter** to open, **e** to show
 evidence references, and **Esc** to go back. Use **g** to open an incident by ID,
 **w** to change the context window, **?** for help, and **q** to quit.
 The terminal needs at least 40 columns by 10 rows. See the
-[usage guide](docs/usage.md#offline-investigation) for device selection,
-incident IDs, and troubleshooting.
+[usage guide](docs/usage.md#offline-investigation) for incident IDs and
+context windows.
 
 ## Evidence and limits
 
@@ -136,7 +138,8 @@ incident IDs, and troubleshooting.
 - [Research and roadmap](PLAN.md) for project goals
 - [Releases][release] and [issue tracker](https://github.com/KartikeyaKotkar/droidsleuth/issues)
 
-DroidSleuth is [MIT licensed](LICENSE).
+DroidSleuth is [MIT licensed](LICENSE). Release archives include
+`BUILD_INFO` and `THIRD_PARTY_NOTICES`.
 
 [release]: https://github.com/KartikeyaKotkar/droidsleuth/releases/tag/v0.2.0
 [archive]: https://github.com/KartikeyaKotkar/droidsleuth/releases/download/v0.2.0/droidsleuth-v0.2.0-linux-amd64.tar.gz

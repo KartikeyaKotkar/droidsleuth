@@ -2,13 +2,14 @@
 
 ## Current scope
 
-Milestone 1 correctness and performance gates are accepted. Milestone 2 adds
-bounded diagnostic evidence and offline investigation; its implementation,
-validation and limitations are recorded in the final sections below. The
-compatibility/reliability gate has completed with a scoped software/emulator
-pass; physical/OEM breadth remains open. Earlier
-Milestone 1 sections retain their historical scope and measurements. PLAN.md
-remains the research and roadmap document.
+Published v0.2.0 supports live main-process capture, optional CPU/RSS,
+retained exit-history collection, and offline investigation in text, JSON or
+the TUI. The development branch adds installation from the GitHub Go module
+and TUI navigation cues. The sections below record results at the revision
+and on the targets tested. Start with the [release gate](#v020-release-readiness-gate),
+[physical logcat follow-up](#v020-physical-device-logcat-warning-follow-up),
+or [development checkout review](#development-checkout-onboarding-review).
+The [roadmap](PLAN.md) describes the original proposals.
 
 ## Milestone 1: main-process capture and offline replay
 
@@ -1981,3 +1982,39 @@ polls. Each recorded the same startup warning, two successful cursor polls,
 one appearance, and a snapshot deadline gap at the capture boundary. The
 original recording replay and timeline output matched byte for byte offline,
 including selected incident details, and its database hash stayed unchanged.
+
+## Development checkout onboarding review
+
+On 2026-11-23, a Linux amd64 build of `5820ae2` exercised both workflows on
+an authorized Motorola Edge 70 Fusion, Android 17/API 37, build
+`A171WEH.36-31`, Android user 0, ADB shell UID 2000. All device reads selected
+the same USB serial. Settings was already running. The recording files used
+mode `0600` in a private directory. Commands below omit the serial and private
+output paths.
+
+| Workflow | Independent check | Result |
+| --- | --- | --- |
+| `collect-history` on Settings | Package UID and package-scoped `dumpsys activity exit-info`, with the device timezone read separately | All 16 reports matched process name, PID, UID, reason, raw time and converted instant. Schema 2 finalized in 0.415 s (28,672 bytes). Each report remained unbound. There were no lifecycle transitions or resource samples. |
+| `watch --summary --resources --duration 30s` on Settings | Read boot ID, UID, PID, stat start ticks, CPU ticks and RSS before and after the run. Device units were 100 ticks/s and 4096 bytes/page. | Schema 3 finalized in 30.529 s (57,344 bytes). All 24 snapshots matched the independent identity. CPU counters stayed within the endpoint readings. Recorded RSS ranged from 39,642 to 39,643 pages, matching the endpoint range. Mean snapshot start interval was 1.258 s. |
+
+Live capture observed one appearance, zero disappearances and zero snapshot
+gaps. Both diagnostic sources recorded their opening and closing coverage
+limits. One of nine logcat polls also reported malformed or oversized input.
+The stored status cannot identify the discarded group. The 16 live timeline
+anchors were retained exit reports. Capture did not observe a new crash.
+These timings describe one ordinary run on one phone, without an overhead
+control or a controlled workload.
+
+With ADB absent from PATH, repeated replay, investigation, index and selected
+detail output matched across the published v0.2.0 binary, the public Go
+`@main` install at `5820ae2`, and the help fix committed as `b868f7a`. Checks
+used a synthetic schema-1 input and the two physical recordings. All 32 report
+anchors in the phone recordings resolved to the original sequence and line
+range. The Linux PTY test exercised both phone files, including resize,
+evidence navigation, signal exit and terminal restoration. File hashes and
+modification times were preserved.
+
+The public Go install ran outside the repository. The Linux release download
+passed its checksum and installed under a temporary prefix. The help regression
+first reproduced failed help exits on all five commands. Module verification, uncached tests,
+race tests and vet passed on Linux amd64 with Go 1.23.12.

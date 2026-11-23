@@ -16,6 +16,11 @@ go test -race ./...
 go vet ./...
 ```
 
+Try `./droidsleuth --help` to see the commands or `./droidsleuth watch --help`
+for capture flags. When reporting a source build, include the Git commit.
+For a Go install, `go version -m "$(command -v droidsleuth)"` shows the installed
+module revision. For a release binary, use the archive's `BUILD_INFO`.
+
 The Linux CI workflow runs the four verification commands on Go 1.23.12.
 To smoke-test the interactive interface, run the following with a finalized
 recording containing a diagnostic anchor:
