@@ -1948,3 +1948,36 @@ and packaging logs are under ignored `.validation/v020-gate/`.
 
 **Verdict: GO for local v0.2.0 release candidate review.** Required gates use
 the emulator-validated scope above. Publication requires separate approval.
+
+## v0.2.0 physical-device logcat warning follow-up
+
+The two-minute Settings capture on a Motorola Edge 70 Fusion (Android 17,
+API 37) recorded one failed logcat source status, observation 19. It was
+the first poll and selected zero observations. Gap 21 shares its collection
+start at 1.896 ms into the session and reports `logcat malformed or oversized
+records; diagnostic coverage incomplete`. The other 36 logcat polls succeeded.
+The recording contains no logcat evidence or raw rejected input.
+
+Three read-only startup polls on the same boot reproduced the warning. Each
+merged tail was empty. Each crash-only tail returned 94,429 bytes and 583
+lines, including buffer headings. The decoded record times predated the
+original capture. Parser diagnostics identified only native `DEBUG` group
+byte-limit rejections. The first attempted addition reached 8,273 bytes at
+line 47, above the 8,192-byte parser limit and below the 128-line limit. The
+transport succeeded under its 4 MiB cap. The numeric tail also met the
+collector's saturation condition. The parser warning took precedence in the
+stored message. A separate timestamp query from the original collection
+start returned no rows and did not recover the original startup batch.
+
+The reproduced warning is an expected limit on retained diagnostic input.
+The exact trigger of the original poll remains unverified because its raw
+bytes were discarded. A sanitized regression fixture preserves the measured
+group lengths and checks both sides of the byte boundary. Production
+collection and parser behavior are unchanged.
+
+The published and checkout binaries each made 24 ADB calls in matched
+eight-second captures, including one numeric logcat poll and two cursor
+polls. Each recorded the same startup warning, two successful cursor polls,
+one appearance, and a snapshot deadline gap at the capture boundary. The
+original recording replay and timeline output matched byte for byte offline,
+including selected incident details, and its database hash stayed unchanged.

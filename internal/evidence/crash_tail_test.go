@@ -8,6 +8,45 @@ import (
 	"testing"
 )
 
+func TestNumericLogcatTailFlagsNativeGroupByteLimit(t *testing.T) {
+	// Line lengths through the first rejected line on the API 37 Motorola.
+	// Keep the byte boundary and group shape. All identifiers and payloads are fixtures.
+	sizes := []int{
+		120, 152, 120, 72, 69, 102, 76, 94, 84, 142, 67, 115, 156, 106, 116, 150,
+		147, 147, 147, 147, 147, 147, 147, 103, 147, 103, 72, 67, 218, 288, 203,
+		266, 266, 266, 266, 266, 266, 266, 266, 266, 266, 266, 266, 266, 266, 266, 266,
+	}
+	prefix := "1700000000.123456 1000 99 99 F DEBUG: "
+	rows := make([]string, 0, len(sizes))
+	for i, size := range sizes {
+		line := prefix
+		if i == 0 {
+			line += "*** *** "
+		}
+		rows = append(rows, line+strings.Repeat("x", size-len(line)))
+	}
+	for _, tc := range []struct {
+		name  string
+		lines []string
+		issue string
+	}{
+		{"under limit", rows[:len(rows)-1], ""},
+		{"over limit", rows, "logcat malformed or oversized records; diagnostic coverage incomplete"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shell := &crashTailShell{output: crashTailBoundary + strings.Join(tc.lines, "\n")}
+			var marker string
+			got, issue := readLogcat(context.Background(), shell, target, &marker)
+			if len(got) != 0 || issue != tc.issue {
+				t.Fatalf("observations=%d issue=%q", len(got), issue)
+			}
+			if len(shell.commands) != 3 {
+				t.Fatalf("logcat poll made %d shell calls", len(shell.commands))
+			}
+		})
+	}
+}
+
 type crashTailShell struct {
 	output   string
 	commands []string
