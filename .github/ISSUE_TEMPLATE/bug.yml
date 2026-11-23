@@ -1,0 +1,41 @@
+name: Bug report
+description: Report a reproducible DroidSleuth defect.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: Share only sanitized excerpts. Remove device serials, private paths, app data, and proprietary stack traces. Keep full recordings and logcat dumps private.
+  - type: input
+    id: version
+    attributes:
+      label: DroidSleuth version or commit
+      placeholder: "v0.2.0, Linux amd64 release"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Linux distribution and architecture, Go version for source builds, and Android API level if ADB is involved.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps and exact command
+      description: Include the flags and a sanitized package name. Say whether the issue reproduces offline, in a fixture, on an emulator, or on physical hardware.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: Include the exit status and sanitized error or relevant replay sequence. Mention the recording schema if known.
+    validations:
+      required: true

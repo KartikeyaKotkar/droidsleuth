@@ -1,0 +1,41 @@
+name: Android compatibility report
+description: Report how capture or exit history behaves on an Android build.
+title: "[Android] "
+body:
+  - type: markdown
+    attributes:
+      value: Successful and partial results are useful. Remove serials, personal data, and app-specific secrets. Share a minimal sanitized excerpt in place of a private recording or full log.
+  - type: input
+    id: version
+    attributes:
+      label: DroidSleuth version or commit
+    validations:
+      required: true
+  - type: dropdown
+    id: target
+    attributes:
+      label: Target type
+      options:
+        - Physical device
+        - Emulator
+    validations:
+      required: true
+  - type: textarea
+    id: android
+    attributes:
+      label: Android build and connection
+      description: Include model or emulator image, Android API level, build ID, ADB version, and authorization state. Omit the serial.
+    validations:
+      required: true
+  - type: textarea
+    id: results
+    attributes:
+      label: Command and outcome
+      description: Include a sanitized command. Say whether it succeeded, returned empty history, recorded a diagnostic gap, or failed. Note whether process snapshots and CPU/RSS were available if tested.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Independent evidence
+      description: If available, describe the comparison against package-scoped ADB output. For a parser issue, include only the sanitized lines required to reproduce the source format.
