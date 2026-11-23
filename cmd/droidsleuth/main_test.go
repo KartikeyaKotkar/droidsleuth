@@ -84,6 +84,16 @@ func TestReplayHasNoADBDependency(t *testing.T) {
 	}
 }
 
+func TestPrivateWatchRejectsResourcesBeforeADB(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	var out, stderr bytes.Buffer
+	args := []string{"watch", "--processes", "private", "--resources", "com.example.app"}
+	err := run(context.Background(), args, &out, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "--resources requires main-process tracking") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestDefaultDirectoryIsPrivate(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", root)

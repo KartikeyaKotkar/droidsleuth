@@ -6,6 +6,7 @@ import "time"
 const (
 	SchemaVersion         = 2 // Default recording schema.
 	ResourceSchemaVersion = 3
+	PrivateSchemaVersion  = 4 // Package-private process snapshots without resource samples.
 )
 
 type Identity struct {

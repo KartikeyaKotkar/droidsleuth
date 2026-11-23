@@ -59,7 +59,7 @@ func runSnapshotScript(t *testing.T, tc scriptCase, mode string) (string, error)
 			t.Fatal(err)
 		}
 	}
-	command, err := snapshotCommand("com.example.app", 10123, mode == "resources")
+	command, err := buildSnapshotCommand("com.example.app", 10123, mode == "resources", mode == "private")
 	if err != nil {
 		t.Fatal(err)
 	}

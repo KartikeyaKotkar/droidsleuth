@@ -25,6 +25,31 @@ func newTimelineFixture(t *testing.T) *timelineFixture {
 	return newTimelineFixtureWithSchema(t, session.SchemaVersion)
 }
 
+func TestPrivateIncidentMainObservedAtBothEndpoints(t *testing.T) {
+	f := newTimelineFixtureWithSchema(t, session.PrivateSchemaVersion)
+	main := session.Process{Name: "com.example.app", Identity: session.Identity{BootID: "boot", UID: 10123, PID: 101, StartTicks: 1000}}
+	worker := session.Process{Name: main.Name + ":remote", Identity: session.Identity{BootID: main.BootID, UID: main.UID, PID: 102, StartTicks: 1001}}
+	f.append(session.Record{Kind: "snapshot", Snapshot: &session.Snapshot{BootID: main.BootID, Processes: []session.Process{main, worker}}})
+	f.append(session.Record{Kind: "gap", Source: "logcat", Error: "unavailable"})
+	f.append(session.Record{Kind: "gap", Error: "disconnect"})
+	f.append(session.Record{Kind: "snapshot", Snapshot: &session.Snapshot{BootID: main.BootID, Processes: []session.Process{main}},
+		Transitions: []session.Transition{{Kind: "no_longer_observed", Process: worker, AfterGap: true}}})
+	f.finish()
+	index := f.timeline("", DefaultContext, DefaultContext)
+	if len(*index.Incidents) != 1 || (*index.Incidents)[0].Process != worker.Name {
+		t.Fatalf("missing worker anchor: %+v", index.Incidents)
+	}
+	l := f.timeline("L4.0", DefaultContext, DefaultContext).Incident.Lifecycle
+	if l.LastPresence == nil || l.SnapshotGaps == nil || *l.SnapshotGaps != 1 || !l.Transition.AfterGap {
+		t.Fatalf("worker coverage lost: %+v", l)
+	}
+	for _, end := range []*SnapshotEndpoint{l.LastPresence, &l.FirstAbsence} {
+		if end.MainProcesses == nil || len(*end.MainProcesses) != 1 || (*end.MainProcesses)[0] != main.Identity {
+			t.Fatalf("missing matched main identity at snapshot: %+v", end)
+		}
+	}
+}
+
 func newTimelineFixtureWithSchema(t *testing.T, schema int) *timelineFixture {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "timeline.db")

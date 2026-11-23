@@ -14,6 +14,7 @@ import (
 type Options struct {
 	Evidence  bool
 	Resources bool
+	Private   bool
 	Path      string
 	Interval  time.Duration
 	// Visit is called only after a record has committed.
@@ -27,7 +28,10 @@ func Run(ctx context.Context, shell Shell, meta session.Metadata, opts Options) 
 	if opts.Interval <= 0 {
 		opts.Interval = time.Second
 	}
-	command, err := snapshotCommand(meta.Package, meta.UID, opts.Resources)
+	if opts.Private && opts.Resources {
+		return errors.New("private process tracking does not support resource samples")
+	}
+	command, err := buildSnapshotCommand(meta.Package, meta.UID, opts.Resources, opts.Private)
 	if err != nil {
 		return err
 	}
@@ -36,6 +40,8 @@ func Run(ctx context.Context, shell Shell, meta session.Metadata, opts Options) 
 	meta.Schema = session.SchemaVersion
 	if opts.Resources {
 		meta.Schema = session.ResourceSchemaVersion
+	} else if opts.Private {
+		meta.Schema = session.PrivateSchemaVersion
 	}
 	var units resourceUnits
 	store, err := session.Create(ctx, opts.Path, meta)
@@ -122,7 +128,7 @@ func Run(ctx context.Context, shell Shell, meta session.Metadata, opts Options) 
 			if opts.Resources {
 				record.Resources = &session.Resources{}
 			}
-			snapshot, collectErr = parseSnapshot(out, meta.Package, meta.UID, record.Resources)
+			snapshot, collectErr = parseScopedSnapshot(out, meta.Package, meta.UID, record.Resources, opts.Private)
 		}
 		if collectErr != nil {
 			record.Kind, record.Error = "gap", collectErr.Error()

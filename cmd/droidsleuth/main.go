@@ -71,26 +71,26 @@ Run droidsleuth COMMAND --help for flags. Put flags before PACKAGE or FILE.`)
 		duration := flags.Duration("duration", 0, "stop after this duration (default: until interrupted)")
 		resources := flags.Bool("resources", false, "record main-process CPU counters and RSS (schema 3)")
 		summary := flags.Bool("summary", false, "show incident anchors after finalizing the recording")
+		processes := flags.String("processes", "main", "process scope: main or private (schema 4, without resources)")
 		if err := flags.Parse(args[1:]); err != nil {
 			return err
 		}
 		if flags.NArg() != 1 || !capture.ValidPackage(flags.Arg(0)) || *user < -1 || *duration < 0 {
 			return errors.New("usage: droidsleuth watch [--device SERIAL] [--user ID] [--out FILE] [--duration 10s] [--resources] [--summary] PACKAGE; flags precede PACKAGE")
 		}
+		private := *processes == "private"
+		if !private && *processes != "main" {
+			return errors.New("--processes must be main or private")
+		}
+		if private && *resources {
+			return errors.New("--resources requires main-process tracking; omit --processes private")
+		}
 		meta, err := probeTarget(ctx, &client, *serial, flags.Arg(0), *user)
 		if err != nil {
 			return err
 		}
 		// Verify the mandatory data sources before creating a recording.
-		command, err := capture.SnapshotCommand(meta.Package, meta.UID)
-		if err != nil {
-			return err
-		}
-		probe, err := client.Shell(ctx, command)
-		if err != nil {
-			return fmt.Errorf("snapshot capability probe: %w", err)
-		}
-		if _, err = capture.ParseSnapshot(probe, meta.Package, meta.UID); err != nil {
+		if err := capture.CheckSnapshot(ctx, client, meta, private); err != nil {
 			return fmt.Errorf("snapshot capability probe: %w", err)
 		}
 		if *path == "" {
@@ -99,7 +99,7 @@ Run droidsleuth COMMAND --help for flags. Put flags before PACKAGE or FILE.`)
 				return err
 			}
 		}
-		options := capture.Options{Path: *path, Evidence: true, Resources: *resources, Visit: func(r session.Record) error { return printRecord(out, r) }}
+		options := capture.Options{Path: *path, Evidence: true, Resources: *resources, Private: private, Visit: func(r session.Record) error { return printRecord(out, r, private) }}
 		if *summary {
 			abs, err := filepath.Abs(*path)
 			if err != nil {
@@ -110,7 +110,7 @@ Run droidsleuth COMMAND --help for flags. Put flags before PACKAGE or FILE.`)
 			if _, err := fmt.Fprintf(diagnostic, "Starting capture for %q on %q to %q\n", meta.Package, meta.Serial, abs); err != nil {
 				return err
 			}
-		} else if _, err := fmt.Fprintf(diagnostic, "Recording main process %s on %s to %s\n", meta.Package, meta.Serial, *path); err != nil {
+		} else if _, err := fmt.Fprintf(diagnostic, "Recording %s %s on %s to %s\n", processLabel(private), meta.Package, meta.Serial, *path); err != nil {
 			return err
 		}
 		captureCtx := ctx
@@ -139,7 +139,9 @@ Run droidsleuth COMMAND --help for flags. Put flags before PACKAGE or FILE.`)
 			return errors.New("usage: droidsleuth replay [--json] FILE")
 		}
 		enc := json.NewEncoder(out)
+		private := false
 		return session.Replay(ctx, flags.Arg(0), func(meta session.Metadata) error {
+			private = meta.Schema == session.PrivateSchemaVersion
 			if *asJSON {
 				return enc.Encode(struct {
 					Metadata session.Metadata `json:"metadata"`
@@ -149,12 +151,15 @@ Run droidsleuth COMMAND --help for flags. Put flags before PACKAGE or FILE.`)
 				meta.Status = "not finalized (active or incomplete)"
 			}
 			_, err := fmt.Fprintf(out, "Package %q; device %q; schema %d; status %s\nTimes are host observation bounds; termination causes are unknown.\n", meta.Package, meta.Serial, meta.Schema, meta.Status)
+			if err == nil && private {
+				_, err = fmt.Fprintln(out, "Process scope: package-private processes under an exclusive package UID.")
+			}
 			return err
 		}, func(record session.Record) error {
 			if *asJSON {
 				return enc.Encode(record)
 			}
-			return printRecord(out, record)
+			return printRecord(out, record, private)
 		})
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
@@ -200,7 +205,14 @@ func managedDirectory() (string, error) {
 	return filepath.Join(root, "droidsleuth"), nil
 }
 
-func printRecord(out io.Writer, r session.Record) error {
+func processLabel(private bool) string {
+	if private {
+		return "package-private process"
+	}
+	return "main process"
+}
+
+func printRecord(out io.Writer, r session.Record, private bool) error {
 	if r.SourceStatus != nil {
 		_, err := fmt.Fprintf(out, "#%d %s bounded read: succeeded=%t selected_observations=%d\n", r.Sequence, r.Source, r.SourceStatus.ReadSucceeded, r.SourceStatus.SelectedObservations)
 		return err
@@ -216,7 +228,7 @@ func printRecord(out io.Writer, r session.Record) error {
 	if r.Snapshot == nil {
 		return errors.New("snapshot record lacks payload")
 	}
-	_, err := fmt.Fprintf(out, "#%d [%.3f..%.3fs] snapshot: %d main process(es), boot=%q\n", r.Sequence, float64(r.StartElapsedNS)/1e9, float64(r.EndElapsedNS)/1e9, len(r.Snapshot.Processes), r.Snapshot.BootID)
+	_, err := fmt.Fprintf(out, "#%d [%.3f..%.3fs] snapshot: %d %s(es), boot=%q\n", r.Sequence, float64(r.StartElapsedNS)/1e9, float64(r.EndElapsedNS)/1e9, len(r.Snapshot.Processes), processLabel(private), r.Snapshot.BootID)
 	if err != nil {
 		return err
 	}
@@ -226,6 +238,12 @@ func printRecord(out io.Writer, r session.Record) error {
 		}
 	}
 	for _, event := range r.Transitions {
+		if private {
+			if _, err := fmt.Fprintf(out, "  %s name=%q uid=%d pid=%d start_ticks=%d after_gap=%t (cause unknown)\n", event.Kind, event.Process.Name, event.Process.UID, event.Process.PID, event.Process.StartTicks, event.AfterGap); err != nil {
+				return err
+			}
+			continue
+		}
 		if _, err := fmt.Fprintf(out, "  %s uid=%d pid=%d start_ticks=%d after_gap=%t (cause unknown)\n", event.Kind, event.Process.UID, event.Process.PID, event.Process.StartTicks, event.AfterGap); err != nil {
 			return err
 		}

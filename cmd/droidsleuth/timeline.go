@@ -148,7 +148,7 @@ func printInvestigation(out io.Writer, report investigate.Report, asJSON bool) e
 		}
 	}
 	for _, g := range report.Gaps {
-		if err := printRecord(out, g); err != nil {
+		if err := printRecord(out, g, false); err != nil {
 			return err
 		}
 	}
@@ -163,8 +163,9 @@ func printInvestigation(out io.Writer, report investigate.Report, asJSON bool) e
 
 // timelinePrinter stops writing at the first output failure.
 type timelinePrinter struct {
-	out io.Writer
-	err error
+	out     io.Writer
+	err     error
+	private bool
 }
 
 func (p *timelinePrinter) line(format string, args ...any) {
@@ -178,7 +179,7 @@ func (p *timelinePrinter) identity(prefix string, id session.Identity) {
 }
 
 func printTimeline(out io.Writer, r investigate.TimelineReport) error {
-	p := timelinePrinter{out: out}
+	p := timelinePrinter{out: out, private: r.Metadata.Schema == session.PrivateSchemaVersion}
 	p.line("Recording %q, package %q, schema %d, status %s", r.Recording, r.Metadata.Package, r.Metadata.Schema, r.Metadata.Status)
 	if r.Incidents != nil {
 		if len(*r.Incidents) == 0 {
@@ -243,6 +244,14 @@ func (p *timelinePrinter) summary(e investigate.IncidentSummary) {
 
 func (p *timelinePrinter) endpoint(label string, e investigate.SnapshotEndpoint) {
 	p.line("  %s #%d [%.3f..%.3fs] device_epoch_seconds=%d", label, e.Sequence, seconds(e.StartElapsedNS), seconds(e.EndElapsedNS), e.DeviceEpochSeconds)
+	if e.MainProcesses != nil {
+		if len(*e.MainProcesses) == 0 {
+			p.line("    Main process absent at this snapshot")
+		}
+		for _, id := range *e.MainProcesses {
+			p.identity("    Main process observed", id)
+		}
+	}
 	p.resources(e.Resources)
 }
 
@@ -256,7 +265,7 @@ func (p *timelinePrinter) observation(row investigate.TimelineObservation, selec
 		p.line("    Coverage gap: %q", row.Error)
 	}
 	if s := row.Snapshot; s != nil {
-		p.line("    Snapshot: %d main process(es), boot=%q", len(s.Processes), s.BootID)
+		p.line("    Snapshot: %d %s(es), boot=%q", len(s.Processes), processLabel(p.private), s.BootID)
 		for _, process := range s.Processes {
 			p.identity(fmt.Sprintf("    Observed %q", process.Name), process.Identity)
 		}

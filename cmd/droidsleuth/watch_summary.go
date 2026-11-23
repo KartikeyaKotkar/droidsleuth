@@ -42,6 +42,10 @@ func printWatchSummary(ctx context.Context, out io.Writer, path string, timeout 
 
 	p := timelinePrinter{out: out}
 	p.line("Recording %q, package %q, schema %d, status %s", report.Recording, report.Metadata.Package, report.Metadata.Schema, report.Metadata.Status)
+	private := report.Metadata.Schema == session.PrivateSchemaVersion
+	if private {
+		p.line("Scope: package-private processes under an exclusive package UID.")
+	}
 	entries := *report.Incidents
 	arg := shellRecordingPath(report.Recording)
 	var incident string
@@ -51,7 +55,11 @@ func printWatchSummary(ctx context.Context, out io.Writer, path string, timeout 
 		p.line("Newest indexed anchors (host collection elapsed time)")
 		for i := len(entries) - 1; i >= max(0, len(entries)-watchSummaryAnchors); i-- {
 			e := entries[i]
-			if e.Source == "" {
+			if private && e.Source == "" {
+				p.line("  %s [%.3f..%.3fs] observed disappearance of %q, PID %d (cause unknown)", e.ID, seconds(e.StartElapsedNS), seconds(e.EndElapsedNS), e.Process, e.PID)
+			} else if private {
+				p.line("  %s [%.3f..%.3fs] %q reported by %q for %q, PID %d (instance association unproven)", e.ID, seconds(e.StartElapsedNS), seconds(e.EndElapsedNS), e.Kind, e.Source, e.Process, e.PID)
+			} else if e.Source == "" {
 				p.line("  %s [%.3f..%.3fs] observed disappearance, PID %d (cause unknown)", e.ID, seconds(e.StartElapsedNS), seconds(e.EndElapsedNS), e.PID)
 			} else {
 				p.line("  %s [%.3f..%.3fs] %q reported by %q, PID %d (instance association unproven)", e.ID, seconds(e.StartElapsedNS), seconds(e.EndElapsedNS), e.Kind, e.Source, e.PID)

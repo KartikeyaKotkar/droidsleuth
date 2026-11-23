@@ -73,11 +73,22 @@ type SnapshotEndpoint struct {
 	BootID              string               `json:"boot_id"`
 	DeviceEpochSeconds  int64                `json:"device_epoch_seconds"`
 	DeviceUptimeSeconds float64              `json:"device_uptime_seconds"`
+	MainProcesses       *[]session.Identity  `json:"main_processes,omitempty"`
 }
 
-func endpoint(r session.Record) *SnapshotEndpoint {
+func endpoint(r session.Record, meta session.Metadata) *SnapshotEndpoint {
 	s := r.Snapshot
-	return &SnapshotEndpoint{Bounds: bounds(r), BootID: s.BootID, DeviceEpochSeconds: s.DeviceEpochSeconds, DeviceUptimeSeconds: s.DeviceUptimeSeconds}
+	e := &SnapshotEndpoint{Bounds: bounds(r), BootID: s.BootID, DeviceEpochSeconds: s.DeviceEpochSeconds, DeviceUptimeSeconds: s.DeviceUptimeSeconds}
+	if meta.Schema == session.PrivateSchemaVersion {
+		main := []session.Identity{}
+		for _, p := range s.Processes {
+			if p.Name == meta.Package {
+				main = append(main, p.Identity)
+			}
+		}
+		e.MainProcesses = &main
+	}
+	return e
 }
 
 type LifecycleIncident struct {
@@ -160,6 +171,9 @@ func Timeline(ctx context.Context, path string, id *IncidentID, before, after ti
 		if r.Metadata.Schema == 1 {
 			report.Limitations = append(report.Limitations, "Schema 1 contains no diagnostic collectors.")
 		}
+		if r.Metadata.Schema == session.PrivateSchemaVersion {
+			report.Limitations = append(report.Limitations, "Lifecycle scope is the main process and package-private names under the verified package UID. Presence at two endpoints does not establish continuous coverage.")
+		}
 		if id == nil {
 			index, truncated, err := timelineIndex(ctx, r)
 			report.Incidents, report.IndexTruncated = &index, truncated
@@ -238,7 +252,7 @@ func timelineDetail(ctx context.Context, r session.Recording, id IncidentID, bef
 			return nil, fmt.Errorf("incident %s contradicts its recorded snapshot", id.String())
 		}
 		d.Anchor = summary(row, 'L', id.index, t.Kind, t.Process.Name, t.Process.PID)
-		d.Lifecycle = &LifecycleIncident{Transition: t, FirstAbsence: *endpoint(row)}
+		d.Lifecycle = &LifecycleIncident{Transition: t, FirstAbsence: *endpoint(row, r.Metadata)}
 	case 'E':
 		if row.Evidence == nil || id.index >= len(row.Evidence.Events) {
 			return nil, missingAnchor(id)
@@ -277,7 +291,7 @@ func collectContext(ctx context.Context, r session.Recording, d *IncidentDetail)
 		}
 		if row.Sequence < d.Anchor.Sequence && d.Lifecycle != nil {
 			if row.Snapshot != nil && row.Snapshot.BootID == d.Lifecycle.Transition.Process.BootID && containsIdentity(row.Snapshot, d.Lifecycle.Transition.Process.Identity) {
-				d.Lifecycle.LastPresence = endpoint(row)
+				d.Lifecycle.LastPresence = endpoint(row, r.Metadata)
 				d.Lifecycle.LastPresence.Resources = resources
 				gaps = 0
 			}

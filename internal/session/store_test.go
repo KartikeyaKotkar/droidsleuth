@@ -59,6 +59,36 @@ func TestDurablePrefixReadOnlyReplayAndNoOverwrite(t *testing.T) {
 	}
 }
 
+func TestPrivateSchemaValidatesScopeAndTransitions(t *testing.T) {
+	ctx := context.Background()
+	meta := Metadata{Schema: PrivateSchemaVersion, Package: "com.example.app", UID: 10123}
+	path := filepath.Join(t.TempDir(), "workers.db")
+	s, err := Create(ctx, path, meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	p := Process{Name: meta.Package + ":remote", Identity: Identity{BootID: "boot", UID: meta.UID, PID: 11, StartTicks: 100}}
+	for _, change := range []func(*Record){
+		func(r *Record) { r.Snapshot.Processes[0].Name = meta.Package + ".global" },
+		func(r *Record) { r.Snapshot.Processes[0].UID++ },
+		func(r *Record) { r.Snapshot.Processes = append(r.Snapshot.Processes, p) },
+		func(r *Record) { r.Transitions = []Transition{{Kind: "no_longer_observed", Process: p}} },
+		func(r *Record) { r.Resources = &Resources{Status: ResourceSingle} },
+	} {
+		record := Record{Sequence: 1, Kind: "snapshot", Snapshot: &Snapshot{BootID: p.BootID, Processes: []Process{p}}}
+		change(&record)
+		if err := s.Append(ctx, record); err == nil {
+			t.Fatalf("invalid private record accepted: %+v", record)
+		}
+	}
+	record := Record{Sequence: 1, Kind: "snapshot", Snapshot: &Snapshot{BootID: p.BootID, Processes: []Process{p}},
+		Transitions: []Transition{{Kind: "appeared", Process: p}}}
+	if err := s.Append(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSchemaAndStorageBounds(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "session.db")

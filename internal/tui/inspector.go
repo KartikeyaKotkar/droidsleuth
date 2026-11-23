@@ -134,6 +134,9 @@ func observationLines(d *investigate.IncidentDetail, row *investigate.TimelineOb
 		}
 		if l := d.Lifecycle; l != nil {
 			add("Observed disappearance. Cause unknown.")
+			if schema == session.PrivateSchemaVersion {
+				add("Process %s", l.Transition.Process.Name)
+			}
 			add("Recorded after_gap=%t · %s", l.Transition.AfterGap, identity(l.Transition.Process.Identity))
 			if l.LastPresence == nil {
 				add("Last observed presence unavailable.")
@@ -155,7 +158,11 @@ func observationLines(d *investigate.IncidentDetail, row *investigate.TimelineOb
 		add("Coverage gap (%s): %s", sourceName(row), row.Error)
 	}
 	if s := row.Snapshot; s != nil {
-		add("Snapshot · %d main processes · boot %s", len(s.Processes), s.BootID)
+		scope := "main processes"
+		if schema == session.PrivateSchemaVersion {
+			scope = "package-private processes"
+		}
+		add("Snapshot · %d %s · boot %s", len(s.Processes), scope, s.BootID)
 		add("Snapshot device epoch %ds · uptime %.3fs", s.DeviceEpochSeconds, s.DeviceUptimeSeconds)
 		for _, p := range s.Processes {
 			add("Observed %s · %s", p.Name, identity(p.Identity))
@@ -164,7 +171,11 @@ func observationLines(d *investigate.IncidentDetail, row *investigate.TimelineOb
 			if t.Kind == "no_longer_observed" && !(row == &d.AnchorObservation && d.Lifecycle != nil) {
 				add("Observed disappearance. Cause unknown.")
 			}
-			add("%s · after_gap=%t · %s", t.Kind, t.AfterGap, identity(t.Process.Identity))
+			if schema == session.PrivateSchemaVersion {
+				add("%s · %s · after_gap=%t · %s", t.Kind, t.Process.Name, t.AfterGap, identity(t.Process.Identity))
+			} else {
+				add("%s · after_gap=%t · %s", t.Kind, t.AfterGap, identity(t.Process.Identity))
+			}
 		}
 		lines = appendResources(lines, row.Resources, schema)
 	}
@@ -185,12 +196,20 @@ func identity(id session.Identity) string {
 
 func appendEndpoint(lines []string, label string, e investigate.SnapshotEndpoint, schema int) []string {
 	lines = append(lines, fmt.Sprintf("%s #%d · host %.3f–%.3fs · device epoch %ds", label, e.Sequence, seconds(e.StartElapsedNS), seconds(e.EndElapsedNS), e.DeviceEpochSeconds))
+	if e.MainProcesses != nil {
+		if len(*e.MainProcesses) == 0 {
+			lines = append(lines, "Main process absent at this snapshot.")
+		}
+		for _, id := range *e.MainProcesses {
+			lines = append(lines, "Main process observed · "+identity(id))
+		}
+	}
 	return appendResources(lines, e.Resources, schema)
 }
 
 func appendResources(lines []string, r *investigate.ResourceObservation, schema int) []string {
 	if r == nil {
-		if schema < 3 {
+		if schema != session.ResourceSchemaVersion {
 			return append(lines, "Resources not recorded (schema 1–2).")
 		}
 		return append(lines, "Resource sample unavailable.")

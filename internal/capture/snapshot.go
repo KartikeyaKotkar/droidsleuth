@@ -2,10 +2,12 @@
 package capture
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -81,12 +83,43 @@ func SnapshotCommand(pkg string, uid int) (string, error) {
 }
 
 func snapshotCommand(pkg string, uid int, resources bool) (string, error) {
+	return buildSnapshotCommand(pkg, uid, resources, false)
+}
+
+// CheckSnapshot verifies the sources required by the selected capture scope.
+func CheckSnapshot(ctx context.Context, shell Shell, meta session.Metadata, private bool) error {
+	command, err := buildSnapshotCommand(meta.Package, meta.UID, false, private)
+	if err != nil {
+		return err
+	}
+	out, err := shell.Shell(ctx, command)
+	if err != nil {
+		return err
+	}
+	_, err = parseScopedSnapshot(out, meta.Package, meta.UID, nil, private)
+	return err
+}
+
+func buildSnapshotCommand(pkg string, uid int, resources, private bool) (string, error) {
 	if !ValidPackage(pkg) || uid < 0 {
 		return "", errors.New("invalid snapshot target")
 	}
 	var before, after, emit string
 	if resources {
 		before, after, emit = resourceTimingBefore, resourceTimingAfter, resourceTimingEmit
+	}
+	owner := ""
+	selector := fmt.Sprintf("  if [ \"$ds_uid\" = '%d' ] && [ \"$ds_name\" = '%s' ]; then", uid, pkg)
+	if private {
+		owner = fmt.Sprintf(`ds_print '__DS_OWNER__'
+ds_packages=$(cmd package list packages -U --user %d --uid %d) || exit 1
+ds_print "$ds_packages"
+[ "$ds_packages" = 'package:%s uid:%d' ] || exit 0
+`, uid/100000, uid, pkg, uid)
+		selector = fmt.Sprintf(`  case "$ds_name" in '%s'|'%s:'?*) ;; *) continue;; esac
+  if [ "$ds_uid" = '%d' ]; then
+    ds_count=$((${ds_count:-0}+1))
+    [ "$ds_count" -le %d ] || exit 1`, pkg, pkg, uid, session.MaxPrivateProcesses)
 	}
 	// Android mksh's printf is external. Raw print and bulk file substitution
 	// avoid repeated execs; shells without those fast paths retain safe fallbacks.
@@ -108,7 +141,7 @@ ds_ticks() {
   shift 19
   ds_start_ticks=$1
 }
-ds_print '__DS_CLOCK__'
+%sds_print '__DS_CLOCK__'
 date +%%s
 ds_read /proc/uptime || exit 1
 ds_print "$ds_value"
@@ -120,7 +153,7 @@ ds_ps=$(ps -A -o PID,UID,NAME)
 ds_print "$ds_ps"
 ds_print '__DS_STAT__'
 ds_print "$ds_ps" | while read -r ds_pid ds_uid ds_name; do
-  if [ "$ds_uid" = '%d' ] && [ "$ds_name" = '%s' ]; then
+%s
     case "$ds_pid" in ''|*[!0-9]*) exit 1;; esac
     ds_read "/proc/$ds_pid/stat" || exit 1
     ds_before=$ds_value
@@ -141,7 +174,7 @@ ds_print "$ds_ps" | while read -r ds_pid ds_uid ds_name; do
 %s  fi
 done
 ds_print '__DS_END__'
-`, uid, pkg, before, after, emit), nil
+`, owner, selector, before, after, emit), nil
 }
 
 func ParseSnapshot(out, pkg string, uid int) (session.Snapshot, error) {
@@ -149,8 +182,19 @@ func ParseSnapshot(out, pkg string, uid int) (session.Snapshot, error) {
 }
 
 func parseSnapshot(out, pkg string, uid int, metrics *session.Resources) (session.Snapshot, error) {
+	return parseScopedSnapshot(out, pkg, uid, metrics, false)
+}
+
+func parseScopedSnapshot(out, pkg string, uid int, metrics *session.Resources, private bool) (session.Snapshot, error) {
 	var snapshot session.Snapshot
 	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if private {
+		if len(lines) < 3 || lines[0] != "__DS_OWNER__" ||
+			lines[1] != fmt.Sprintf("package:%s uid:%d", pkg, uid) || lines[2] != "__DS_CLOCK__" {
+			return snapshot, errors.New("cannot verify an exclusive package UID; shared or unverifiable ownership")
+		}
+		lines = lines[2:]
+	}
 	if len(lines) < 9 || lines[0] != "__DS_CLOCK__" || lines[3] != "__DS_BOOT__" || lines[5] != "__DS_PS__" || lines[len(lines)-1] != "__DS_END__" {
 		return snapshot, errors.New("incomplete snapshot framing")
 	}
@@ -193,17 +237,20 @@ func parseSnapshot(out, pkg string, uid int, metrics *session.Resources) (sessio
 		}
 		seen[pid] = true
 		name := strings.Join(fields[2:], " ")
-		if name != pkg {
+		if name != pkg && !(private && session.PrivateProcessName(pkg, name)) {
 			continue
 		}
 		// Never silently interpret a changed package UID as target absence.
 		if rowUID != uid {
-			if rowUID/100000 == uid/100000 {
+			if !private && rowUID/100000 == uid/100000 {
 				return snapshot, errors.New("target UID changed; start a new recording")
 			}
 			continue
 		}
-		processes[pid] = session.Process{Identity: session.Identity{BootID: snapshot.BootID, UID: uid, PID: pid}, Name: pkg}
+		if private && len(processes) >= session.MaxPrivateProcesses {
+			return snapshot, errors.New("private process limit exceeded")
+		}
+		processes[pid] = session.Process{Identity: session.Identity{BootID: snapshot.BootID, UID: uid, PID: pid}, Name: name}
 	}
 	if statAt == -1 {
 		return snapshot, errors.New("missing stat section")
@@ -253,6 +300,14 @@ func parseSnapshot(out, pkg string, uid int, metrics *session.Resources) (sessio
 			timingLine = ""
 		}
 		*metrics = resourceFields(snapshot, statLine, timingLine)
+	}
+	if private {
+		slices.SortFunc(snapshot.Processes, func(a, b session.Process) int {
+			if order := cmp.Compare(a.Name, b.Name); order != 0 {
+				return order
+			}
+			return cmp.Compare(a.PID, b.PID)
+		})
 	}
 	return snapshot, nil
 }

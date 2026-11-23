@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -47,7 +49,11 @@ func (m *model) View() string {
 		body = []string{"> " + m.idInput}
 		keys = "Enter Open  Esc Cancel"
 	case m.screen == indexScreen:
-		header = append(header, "Incident index")
+		label := "Incident index"
+		if m.index.Metadata.Schema == session.PrivateSchemaVersion {
+			label += " · package-private scope"
+		}
+		header = append(header, label)
 		if m.index.Incidents != nil {
 			header = append(header, fmt.Sprintf("%s · schema %d · %d incidents", m.index.Metadata.Package, m.index.Metadata.Schema, len(*m.index.Incidents)))
 			if len(*m.index.Incidents) == 0 {

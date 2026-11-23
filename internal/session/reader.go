@@ -15,11 +15,11 @@ type Recording struct {
 }
 
 func (r Recording) ReadRecord(ctx context.Context, sequence int64) (Record, error) {
-	return readRecord(r.tx.QueryRowContext(ctx, selectRecords+" WHERE sequence = ?", sequence), r.Metadata.Schema)
+	return readRecord(r.tx.QueryRowContext(ctx, selectRecords+" WHERE sequence = ?", sequence), r.Metadata)
 }
 
 func (r Recording) Scan(ctx context.Context, visit func(Record) error) error {
-	return scanRecords(ctx, r.tx, r.Metadata.Schema, visit)
+	return scanRecords(ctx, r.tx, r.Metadata, visit)
 }
 
 // WithFinalizedRecording keeps all reads on the same transaction. The path check

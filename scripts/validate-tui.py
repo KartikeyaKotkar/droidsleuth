@@ -48,6 +48,7 @@ class Terminal:
                 observed.extend(os.read(self.master, 65536))
         if token not in observed:
             raise AssertionError(f"missing {text!r} in terminal output {bytes(observed[-4096:])!r}")
+        return bytes(observed)
 
     def restored(self, status=0):
         self.expect("\x1b[?1049l")
@@ -86,7 +87,8 @@ def main():
     cli = [binary, "investigate", "--timeline", "--json"]
     index = subprocess.check_output([*cli, recording], env=env)
     assert index == subprocess.check_output([*cli, recording], env=env)
-    entry = next(row for row in json.loads(index)["incidents"] if row["id"].startswith("E"))
+    timeline = json.loads(index)
+    entry = next(row for row in timeline["incidents"] if row["id"].startswith("E"))
     incident = entry["id"]
     detail_args = ["--incident", incident, recording]
     detail = subprocess.check_output([*cli, *detail_args], env=env)
@@ -129,6 +131,19 @@ def main():
         terminal.expect("association unproven")
         terminal.send(b"\x04")
         terminal.restored()
+
+    # Private-worker fixtures keep the main process alive. Show the observed
+    # main identity at both bounds of a selected worker disappearance.
+    if timeline["metadata"]["schema"] == 4:
+        worker = next(row for row in timeline["incidents"] if row["id"].startswith("L"))
+        with Terminal(binary, ["--incident", worker["id"], recording], env) as terminal:
+            terminal.expect("Timeline ·")
+            terminal.send(b"\r")
+            frame = terminal.expect("Main process observed")
+            assert b"Observed disappearance. Cause unknown." in frame
+            assert worker["process"].encode() in frame
+            terminal.send(b"q")
+            terminal.restored()
 
     with tempfile.TemporaryDirectory(prefix="droidsleuth-tui-") as root:
         directory = pathlib.Path(root) / "droidsleuth"

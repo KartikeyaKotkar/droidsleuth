@@ -16,8 +16,8 @@ import (
 )
 
 type Store struct {
-	db     *sql.DB
-	schema int
+	db   *sql.DB
+	meta Metadata
 }
 
 func open(path, mode string) (*sql.DB, error) {
@@ -43,8 +43,11 @@ func Create(ctx context.Context, path string, meta Metadata) (*Store, error) {
 	if meta.Schema == 0 {
 		meta.Schema = SchemaVersion
 	}
-	if meta.Schema != SchemaVersion && meta.Schema != ResourceSchemaVersion {
+	if meta.Schema != SchemaVersion && meta.Schema != ResourceSchemaVersion && meta.Schema != PrivateSchemaVersion {
 		return nil, fmt.Errorf("unsupported write schema %d", meta.Schema)
+	}
+	if err := meta.validatePrivateScope(); err != nil {
+		return nil, err
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
@@ -87,12 +90,12 @@ CREATE TABLE observations (sequence INTEGER PRIMARY KEY, payload TEXT NOT NULL);
 		return nil, err
 	}
 	failed = false
-	return &Store{db: db, schema: meta.Schema}, nil
+	return &Store{db: db, meta: meta}, nil
 }
 
 // Append commits one observation and all its derived transitions atomically.
 func (s *Store) Append(ctx context.Context, record Record) error {
-	if err := validateRecord(record, s.schema); err != nil {
+	if err := validateRecord(record, s.meta); err != nil {
 		return err
 	}
 	body, err := json.Marshal(record)
@@ -106,8 +109,8 @@ func (s *Store) Append(ctx context.Context, record Record) error {
 	return err
 }
 
-func validateRecord(record Record, version int) error {
-	if err := validateResources(record, version); err != nil {
+func validateRecord(record Record, meta Metadata) error {
+	if err := validateResources(record, meta.Schema); err != nil {
 		return err
 	}
 	if record.Sequence <= 0 {
@@ -158,6 +161,9 @@ func validateRecord(record Record, version int) error {
 			return errors.New("unknown lifecycle transition")
 		}
 	}
+	if meta.Schema == PrivateSchemaVersion {
+		return validatePrivateSnapshot(record, meta)
+	}
 	return nil
 }
 
@@ -201,7 +207,7 @@ func Replay(ctx context.Context, path string, header func(Metadata) error, visit
 	if err := header(meta); err != nil {
 		return err
 	}
-	return scanRecords(ctx, db, meta.Schema, visit)
+	return scanRecords(ctx, db, meta, visit)
 }
 
 type recordingQuery interface {
@@ -214,7 +220,7 @@ func readMetadata(ctx context.Context, q recordingQuery) (Metadata, error) {
 	if err := q.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return Metadata{}, err
 	}
-	if version != 1 && version != SchemaVersion && version != ResourceSchemaVersion {
+	if version != 1 && version != SchemaVersion && version != ResourceSchemaVersion && version != PrivateSchemaVersion {
 		return Metadata{}, fmt.Errorf("unsupported session schema %d", version)
 	}
 	var raw sql.NullString
@@ -231,6 +237,9 @@ func readMetadata(ctx context.Context, q recordingQuery) (Metadata, error) {
 	if meta.Schema != version {
 		return Metadata{}, errors.New("inconsistent metadata schema")
 	}
+	if err := meta.validatePrivateScope(); err != nil {
+		return Metadata{}, err
+	}
 	switch meta.Status {
 	case "recording", "interrupted", "complete", "failed":
 	default:
@@ -243,14 +252,14 @@ const selectRecords = `SELECT sequence,
 CASE WHEN length(CAST(payload AS BLOB)) <= 65536 THEN payload END
 FROM observations`
 
-func scanRecords(ctx context.Context, q recordingQuery, version int, visit func(Record) error) error {
+func scanRecords(ctx context.Context, q recordingQuery, meta Metadata, visit func(Record) error) error {
 	rows, err := q.QueryContext(ctx, selectRecords+" ORDER BY sequence")
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		record, err := readRecord(rows, version)
+		record, err := readRecord(rows, meta)
 		if err != nil {
 			return err
 		}
@@ -261,7 +270,7 @@ func scanRecords(ctx context.Context, q recordingQuery, version int, visit func(
 	return rows.Err()
 }
 
-func readRecord(row interface{ Scan(...any) error }, version int) (Record, error) {
+func readRecord(row interface{ Scan(...any) error }, meta Metadata) (Record, error) {
 	var seq int64
 	var payload sql.NullString
 	if err := row.Scan(&seq, &payload); err != nil {
@@ -277,10 +286,10 @@ func readRecord(row interface{ Scan(...any) error }, version int) (Record, error
 	if record.Sequence != seq {
 		return Record{}, fmt.Errorf("inconsistent observation sequence %d", seq)
 	}
-	if version == 1 && (record.Source != "" || record.Evidence != nil || record.SourceStatus != nil || record.Kind == "evidence") {
+	if meta.Schema == 1 && (record.Source != "" || record.Evidence != nil || record.SourceStatus != nil || record.Kind == "evidence") {
 		return Record{}, errors.New("schema 2 record in schema 1 recording")
 	}
-	if err := validateRecord(record, version); err != nil {
+	if err := validateRecord(record, meta); err != nil {
 		return Record{}, fmt.Errorf("observation %d: %w", seq, err)
 	}
 	return record, nil
