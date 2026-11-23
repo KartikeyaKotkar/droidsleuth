@@ -9,8 +9,9 @@ It saves the evidence in a local SQLite file you can inspect offline.
 
 ![Terminal recording showing the incident index, timeline, and stored evidence for a disposable app](assets/incident-demo.gif)
 
-*Real DroidSleuth v0.2.0 output from a sanitized API 37 emulator validation
-recording. The app was a disposable test fixture.* [Demo provenance](assets/README.md)
+*The updated TUI shows the selected incident’s position, host collection time,
+and attribution uncertainty. Captured offline from a sanitized API 37 emulator
+recording of a disposable test app.* [Demo provenance](assets/README.md)
 
 ## Choose a workflow
 
