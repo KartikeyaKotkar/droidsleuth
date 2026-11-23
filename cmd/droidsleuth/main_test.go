@@ -4,12 +4,44 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/KartikeyaKotkar/droidsleuth/internal/session"
 )
+
+// Exercise the exit status and output seen by someone trying a fresh install.
+func TestCommandHelp(t *testing.T) {
+	if os.Getenv("DROIDSLEUTH_TEST_HELP") == "1" {
+		os.Args = os.Args[2:] // "--" stands in for argv[0].
+		main()
+		os.Exit(0)
+	}
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--help"}, "collect-history"},
+		{[]string{"-h"}, "watch"},
+		{[]string{"devices", "--help"}, "devices"},
+		{[]string{"collect-history", "--help"}, "-out"},
+		{[]string{"watch", "-h"}, "-summary"},
+		{[]string{"replay", "--help"}, "-json"},
+		{[]string{"investigate", "--help"}, "-timeline"},
+	} {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			args := append([]string{"-test.run=^TestCommandHelp$", "--"}, tc.args...)
+			cmd := exec.Command(os.Args[0], args...)
+			cmd.Env = append(os.Environ(), "DROIDSLEUTH_TEST_HELP=1", "PATH="+t.TempDir())
+			output, err := cmd.Output()
+			if err != nil || !bytes.Contains(output, []byte(tc.want)) {
+				t.Fatalf("help: %v, output %q", err, output)
+			}
+		})
+	}
+}
 
 func TestReplayHasNoADBDependency(t *testing.T) {
 	ctx := context.Background()

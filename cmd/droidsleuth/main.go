@@ -21,7 +21,7 @@ import (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
+	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil && !errors.Is(err, flag.ErrHelp) {
 		fmt.Fprintf(os.Stderr, "droidsleuth: %s\n", err)
 		os.Exit(1)
 	}
@@ -31,11 +31,31 @@ func run(ctx context.Context, args []string, out, diagnostic io.Writer) error {
 	if len(args) == 0 {
 		return errors.New("usage: droidsleuth devices | watch [flags] PACKAGE | collect-history --out FILE PACKAGE | replay [--json] FILE | investigate [--json] [--timeline | --tui] (FILE | --last)")
 	}
+	if len(args) == 1 && isHelpFlag(args[0]) {
+		_, err := fmt.Fprintln(out, `Usage: droidsleuth COMMAND [flags]
+
+  devices                            List ADB devices and authorization states.
+  collect-history --out FILE PACKAGE Save Android's retained exit reports.
+  watch [flags] PACKAGE              Record a reproduction. Use --summary for incident IDs.
+  investigate [flags] (FILE | --last) Inspect incidents offline. Use --tui to browse.
+  replay [--json] FILE               Read the recorded observations in order.
+
+Run droidsleuth COMMAND --help for flags. Put flags before PACKAGE or FILE.`)
+		return err
+	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(diagnostic)
+	commandHelp := len(args) == 2 && isHelpFlag(args[1])
+	if commandHelp {
+		flags.SetOutput(out)
+	}
 	client := adb.Client{}
 	switch args[0] {
 	case "devices":
+		if commandHelp {
+			_, err := fmt.Fprintln(out, "Usage: droidsleuth devices\nList ADB devices and authorization states as JSON.")
+			return err
+		}
 		if len(args) != 1 {
 			return errors.New("usage: droidsleuth devices")
 		}
@@ -140,6 +160,8 @@ func run(ctx context.Context, args []string, out, diagnostic io.Writer) error {
 		return fmt.Errorf("unknown command %q", args[0])
 	}
 }
+
+func isHelpFlag(arg string) bool { return arg == "-h" || arg == "--help" }
 
 func probeTarget(ctx context.Context, client *adb.Client, serial, pkg string, user int) (session.Metadata, error) {
 	devices, err := client.Devices(ctx)
