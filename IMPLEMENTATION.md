@@ -2018,3 +2018,135 @@ The public Go install ran outside the repository. The Linux release download
 passed its checksum and installed under a temporary prefix. The help regression
 first reproduced failed help exits on all five commands. Module verification, uncached tests,
 race tests and vet passed on Linux amd64 with Go 1.23.12.
+
+## v0.3 package-private worker investigation
+
+### Feasibility gate
+
+Tested ordinary shell UID 2000 on two task-owned x86-64 AVDs. The dedicated
+ADB server disabled USB and mDNS discovery. Device commands selected one
+emulator explicitly. Physical-device validation is deferred.
+
+| Android image | Fingerprint |
+| --- | --- |
+| API 30 AOSP | `Android/sdk_phone_x86_64/generic_x86_64:11/RSR1.210722.013.A2/10067904:userdebug/test-keys` |
+| API 37 Google Play | `google/sdk_gphone64_x86_64/emu64xa:17/CE2A.260420.051.A2/16418371:user/release-keys` |
+
+On both images, `cmd package list packages -U --user 0 --uid UID` listed
+one exact package for the fixture UID and two separate rows for the
+same-signed shared-UID pair. Both images returned the same row and census
+formats. The global name had the app UID and failed the name check. The
+isolated service had a package-prefixed name and failed the UID check.
+The package lookalike failed both. The main and two private workers
+passed matching PID, UID, command line and bracketed start-tick checks.
+Three independently observed worker resets per image preserved the main
+and peer process identities.
+
+The feasibility harness interleaved 40 ADB wall-time samples per variant
+and timed two in-device batches of 20 snapshots per variant with
+`toybox time -p`. It compared the accepted main-only shell command, three
+process identity checks, and three checks plus the Package Manager lookup.
+Shell CPU covers the timed command tree. Binder work in `system_server`
+falls outside that measurement.
+
+| API | Median ADB wall time (main / three / verified), ms | Median command-tree CPU (main / three / verified), ms |
+| --- | --- | --- |
+| 30 | 34.347 / 45.864 / 54.947 | 33.160 / 44.909 / 47.843 |
+| 37 | 37.890 / 53.039 / 60.818 | 36.422 / 51.999 / 59.413 |
+
+Ownership verification added 9.083 ms and 7.779 ms median ADB wall time
+on API 30 and API 37 respectively. Both images cleared the feasibility gate.
+This command-level measurement precedes the matched recording comparison.
+
+### Scope and correctness
+
+`watch --processes private` checks the selected user's exclusive package UID
+before recording and again inside every bounded snapshot call. A mapping
+failure, conflicting same-user main UID, selected-process race, or more than
+16 matching processes makes the snapshot incomplete. Complete censuses match
+the exact package and `package:<suffix>` names with that UID. Package Manager
+and proc reads are sampled during one shell invocation. Their results
+describe the observed mapping and kernel identity during that interval.
+
+Private mode writes schema 4 using the existing SQLite layout. The version
+distinguishes worker observations from historical main-process scope. It
+preserves stable incident IDs, separate diagnostic gaps, and full process
+identities. Incident detail shows which main instances were observed at the worker's
+last-presence and first-absence snapshots. Evidence remains a source claim
+with unproven instance association. CPU/RSS remains available through
+main-process watch. Shared UIDs, isolated processes and global names are
+outside private mode. Build the reproducible test APKs using the
+[private worker fixture](testdata/android/private-workers/README.md).
+
+### Emulator and offline regression
+
+Each emulator recorded three separate remote-worker removals and appearances,
+including one controlled Java fatal. Independent scoped proc reads confirmed
+each replacement and the same main and peer identities. Private preflight
+rejected the shared-UID fixture before creating a recording. An injected
+transport failure created one snapshot gap on each image. Recovery with the
+same identities produced no transition. The captures retained explicit
+diagnostic gaps without creating lifecycle transitions.
+
+| API | Complete snapshots | Snapshot gaps | Logcat gaps | Exit-history gaps | Recorded worker reports |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 30 | 56 | 1 | 20 | 2 | 1 Java fatal, 6 exit-history observations |
+| 37 | 54 | 1 | 20 | 2 | 1 Java fatal, 3 exit-history observations |
+
+Each exit-history observation matched the PID, UID, reason and raw time of
+an independently read Android report. Repeated reports can occur across
+polls. Both captures passed evidence-reference checks, deterministic
+offline investigation, recording hash checks and Linux PTY navigation.
+PID reuse, reboot, unreadable worker, overflow, cross-user exclusion, and
+changed ownership are deterministic fixture checks. Physical validation
+and transport interruption beyond the injected fault remain deferred.
+
+With Go 1.23.12, module verification, tests, race tests and vet passed.
+Replay and investigation text and JSON matched `3c7d98c` byte for byte
+on a synthetic schema-1 input and retained schema-2 and schema-3 inputs.
+The input hashes remained stable.
+
+### Matched capture performance
+
+`3c7d98c` and private mode ran baseline/candidate/candidate/baseline in
+five-minute windows, with one emulator active at a time and identical
+diagnostic collection. Each pair below gives the median of two baseline
+windows and two private-mode windows. Snapshot p95 measures shell round-trip
+wall time, while cadence p95 measures time between consecutive snapshot
+starts. Host CPU includes reaped child CPU and is expressed as a percentage
+of one core. Peak RSS samples live process trees about every 10 ms and may
+miss shorter peaks. Both host metrics exclude the shared ADB server and
+emulator. Device CPU comes from six interleaved 20-snapshot command batches
+per mode. It measures the command tree and excludes Binder work in
+`system_server`. The capture run gives no battery or thermal estimate.
+
+| API and workload | Cadence p95, ms | Snapshot p95, ms | Device CPU per command, ms | Host CPU, % | Peak tree RSS, MiB | Mean snapshot bytes | SQLite size, KiB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 30 main and 2 workers | 1042.18 / 1060.30 | 37.72 / 56.14 | 30.205 / 46.286 | 1.241 / 1.218 | 38.03 / 38.17 | 456.96 / 730.51 | 224 / 322 |
+| 30 main only | 1039.96 / 1047.59 | 36.29 / 43.67 | 30.428 / 35.871 | 1.205 / 1.198 | 38.47 / 38.92 | 456.54 / 456.24 | 198 / 196 |
+| 37 main and 2 workers | 1047.67 / 1072.12 | 43.79 / 68.01 | 36.498 / 57.584 | 1.220 / 1.231 | 38.07 / 37.53 | 456.76 / 728.50 | 220 / 314 |
+| 37 main only | 1056.88 / 1056.09 | 50.67 / 52.25 | 36.322 / 42.805 | 1.214 / 1.200 | 37.28 / 37.31 | 456.48 / 456.31 | 190 / 188 |
+
+With three processes, private mode passed all approved limits. Cadence p95
+rose 1.74% on API 30 and 2.33% on API 37 against the 20% limit. Added host
+CPU was at most 0.011 percentage points against 1 point. Added sampled RSS
+was at most 0.15 MiB against 8 MiB. Mean encoded growth stayed under 274
+bytes and the largest observed row grew by at most 604 bytes against the
+2 KiB limit. Every steady-state snapshot completed. Two windows had one
+intentional capture-deadline gap, which is outside the steady-state
+denominator. The trace showed one ADB call per snapshot and one startup
+snapshot call in either mode. Each four-window group made equal counts of
+other ADB calls. Default main-process snapshot commands matched the baseline
+byte for byte. The capture still stops at 240 MiB under a 256 MiB SQLite
+ceiling.
+
+Main-only controls also passed on both images. Private mode added 5.443 ms
+of command-tree CPU on API 30 and 6.483 ms on API 37 with one selected
+process. Cadence changed by +0.73% and −0.07% respectively. Capture
+completeness was 100% in both main-only controls.
+
+**Acceptance: READY WITH LIMITATIONS.** The opt-in workflow passed
+ownership, lifecycle, evidence, compatibility and performance gates on
+both tested emulator images. Physical-device and OEM validation remain
+deferred. Diagnostic availability depends on Android's retained sources
+and their read limits.

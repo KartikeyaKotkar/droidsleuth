@@ -42,6 +42,30 @@ under `$XDG_STATE_HOME/droidsleuth`, normally `~/.local/state/droidsleuth`.
 Recordings use mode `0600`. Review any recording, JSON export, or terminal
 transcript before sharing.
 
+### Private worker tracking
+
+Use a development build to investigate a worker failure while the main
+process stays alive.
+
+```sh
+droidsleuth watch --processes private --summary --out workers.db com.example.app
+droidsleuth investigate --tui workers.db
+```
+
+The collector checks that Package Manager lists exactly one installed package
+under the selected user's UID. It tracks the exact main name and
+`com.example.app:<suffix>` workers with that UID, up to 16 concurrent
+instances. A failed ownership check, unreadable selected process, or overflow
+records a snapshot gap. Worker disappearance leaves its cause unknown.
+Incident details show the main instances observed at the worker incident's
+snapshot endpoints. Activity between polls remains unknown.
+
+Private mode writes schema 4 and requires a reader that supports it.
+Use ordinary `watch --resources` for main-process CPU/RSS. Shared UID
+packages, isolated services, and globally named processes are outside private
+mode. Android reports remain separate source claims with unproven instance
+association.
+
 ## Offline investigation
 
 ```text
@@ -73,8 +97,9 @@ rows and displays captured truncation. Quit and reopen the TUI if the file chang
 
 Replay JSON emits a metadata object followed by stored observations.
 `collect-history` and plain `watch` write schema 2. `watch --resources` writes
-schema 3. Replay and investigation read schemas 1–3. A finalized recording is
-required for timeline mode and `--last`.
+schema 3. All current readers support schemas 1–3. Development builds with
+private-worker support also read schema 4. Timeline mode and `--last`
+require a finalized recording.
 
 CPU is shown as a percentage of one logical CPU across a measured interval.
 Multithreaded workloads can exceed 100%. Rates stop across snapshot gaps,

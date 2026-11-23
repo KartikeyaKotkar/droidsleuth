@@ -50,6 +50,12 @@ or `--duration 30s` for a timed recording.
 droidsleuth investigate --tui repro.db
 ```
 
+The development build can also record package-private workers such as
+`com.example.app:remote`. Use
+`droidsleuth watch --processes private --summary --out workers.db com.example.app`.
+This mode requires an exclusive package UID and writes schema 4.
+[Private process scope and compatibility](docs/usage.md#private-worker-tracking)
+
 ## What you can inspect
 
 - **Process lifecycle.** DroidSleuth distinguishes process instances using
@@ -61,7 +67,8 @@ droidsleuth investigate --tui repro.db
   validated main process across observed intervals.
 - **Offline timelines.** A bounded ADB capture writes a local recording that
   the TUI, text and JSON views, and raw replay can read without a connected
-  device. Replay and investigation read SQLite schemas 1–3.
+  device. v0.2.0 reads SQLite schemas 1–3. Development builds also read
+  schema 4.
 
 ## Platforms and requirements
 
@@ -125,8 +132,10 @@ context windows.
 - Diagnostic coverage can be **incomplete**. Logcat buffers roll over, record
   reads are bounded, OEM formats vary, and exit history may expire or arrive
   late. An empty read cannot rule out an incident.
-- The lifecycle tracker covers the main process. Secondary, custom-named, and
-  isolated processes fall outside that tracker.
+- Live capture defaults to the main process. Private-worker mode covers
+  package-prefixed workers under the same exclusive package UID. Globally
+  named processes, isolated services, and shared-UID packages fall outside
+  that scope.
 - Recordings and exports may contain device serials and app diagnostics.
   Review and sanitize them before sharing.
 
