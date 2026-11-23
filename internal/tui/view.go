@@ -128,6 +128,27 @@ func (m *model) View() string {
 			status += "Analysis incomplete"
 		}
 	}
+	if status == "" {
+		switch m.screen {
+		case indexScreen:
+			if m.index.Incidents != nil && len(*m.index.Incidents) > 0 {
+				entry := (*m.index.Incidents)[m.indexCursor.selected]
+				description := "association unproven"
+				if entry.Kind == "no_longer_observed" {
+					description = "cause unknown"
+				}
+				status = fmt.Sprintf("%d/%d · %.3fs host · %s", m.indexCursor.selected+1, len(*m.index.Incidents), seconds(entry.StartElapsedNS), description)
+			}
+		case detailScreen:
+			if len(m.rows) > 0 {
+				status = fmt.Sprintf("Observation %d of %d · * marks the incident", m.timelineCursor.selected+1, len(m.rows))
+			}
+		case referencesScreen:
+			if len(m.refs) > 0 {
+				status = fmt.Sprintf("Reference %d of %d", m.refsCursor.selected+1, len(m.refs))
+			}
+		}
+	}
 	if m.help {
 		start := min(m.helpScroll, len(body)-1)
 		body = body[start:min(len(body), start+m.page())]

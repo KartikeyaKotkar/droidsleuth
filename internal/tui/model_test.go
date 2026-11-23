@@ -42,3 +42,21 @@ func TestIndexDetailBack(t *testing.T) {
 		t.Fatalf("index selection lost: %s", m.View())
 	}
 }
+
+func TestIndexShowsCollectionTimeAndUncertainty(t *testing.T) {
+	entries := []investigate.IncidentSummary{
+		{ID: "E4.0", Kind: "exit_report", Process: "com.example.app", PID: 7},
+		{ID: "L6.0", Kind: "no_longer_observed", Process: "com.example.app", PID: 7},
+	}
+	m := &model{width: 120, height: 24, index: investigate.TimelineReport{Incidents: &entries}}
+	view := m.View()
+	for _, want := range []string{"exit_report", "no_longer_observed", "association unproven", "1/2", "0.000s"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("missing %q in %q", want, view)
+		}
+	}
+	press(m, runeKey('j'))
+	if !strings.Contains(m.View(), "2/2") || !strings.Contains(m.View(), "cause unknown") {
+		t.Fatal("selection position did not update")
+	}
+}
