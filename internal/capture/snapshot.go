@@ -242,7 +242,7 @@ func parseScopedSnapshot(out, pkg string, uid int, metrics *session.Resources, p
 		}
 		// Never silently interpret a changed package UID as target absence.
 		if rowUID != uid {
-			if !private && rowUID/100000 == uid/100000 {
+			if name == pkg && rowUID/100000 == uid/100000 {
 				return snapshot, errors.New("target UID changed; start a new recording")
 			}
 			continue

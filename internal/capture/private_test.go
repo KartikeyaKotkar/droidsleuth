@@ -28,6 +28,7 @@ func TestPrivateSnapshotCommand(t *testing.T) {
 		{"complete", present, unique, false, 3},
 		{"shared UID", present, unique + "echo 'package:com.example.peer uid:10123'\n", false, -1},
 		{"unsupported UID lookup", present, "#!/bin/sh\nexit 1\n", false, -1},
+		{"main UID conflict after lookup", strings.Replace(present, "101 10123 com.example.app", "101 10124 com.example.app", 1), unique, false, -1},
 		{"unreadable worker", present, unique, true, -1},
 		{"selected process cap", many, unique, false, -1},
 		{"complete absence", "PID UID NAME\n1 0 init\n", unique, false, 0},
